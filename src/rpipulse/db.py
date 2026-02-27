@@ -183,3 +183,45 @@ def hourly_peak_and_avg(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, float
         }
         for row in rows
     ]
+
+
+def latest_observation(db_path: Path = DEFAULT_DB_PATH) -> Optional[dict[str, int]]:
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT ts_ms, unique_devices_count, COALESCE(raw_count, 0) AS raw_count
+            FROM observations
+            ORDER BY ts_ms DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "ts_ms": int(row[0]),
+        "unique_devices_count": int(row[1]),
+        "raw_count": int(row[2]),
+    }
+
+
+def latest_observations(limit: int = 20, db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, int]]:
+    init_db(db_path)
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT ts_ms, unique_devices_count, COALESCE(raw_count, 0) AS raw_count
+            FROM observations
+            ORDER BY ts_ms DESC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        ).fetchall()
+    return [
+        {
+            "ts_ms": int(row[0]),
+            "unique_devices_count": int(row[1]),
+            "raw_count": int(row[2]),
+        }
+        for row in rows
+    ]

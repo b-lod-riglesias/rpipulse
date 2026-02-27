@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% from "_nav.html" import top_nav %}
+
+{% block title %}RpiPulse - Dashboard Command{% endblock %}
+{% block body_class %}bg-bg-dark text-text-main font-body min-h-screen flex flex-col overflow-x-hidden selection:bg-primary selection:text-bg-dark{% endblock %}
+
+{% block content %}
+<header class="sticky top-0 z-50 w-full border-b border-surface-highlight bg-bg-dark/95 backdrop-blur-sm">
+  <div class="flex h-16 items-center justify-between px-6 lg:px-8">
+    <div class="flex items-center gap-4">
+      <div class="flex size-8 items-center justify-center rounded-lg bg-primary/20 text-primary">
+        <span class="material-symbols-outlined">wifi_tethering</span>
+      </div>
+      <h1 class="text-xl font-bold tracking-tight font-display text-text-main">RpiPulse</h1>
+    </div>
+    {{ top_nav('dashboard') }}
+    <div class="flex items-center gap-3 text-xs font-mono text-text-muted">
+      <span class="flex items-center gap-2"><span class="h-2 w-2 rounded-full bg-status-green animate-pulse"></span>LIVE FEED</span>
+      <span class="text-surface-highlight">|</span>
+      <span id="updated-at">UPDATED: --:--:--</span>
+    </div>
+  </div>
+</header>
+
+<main class="flex-1 p-6 lg:p-8 max-w-[1600px] mx-auto w-full space-y-6" data-page="dashboard">
+  <div class="flex flex-wrap items-end justify-between gap-4 pb-2 border-b border-surface-highlight">
+    <div>
+      <h2 class="text-3xl font-bold tracking-tight font-display text-text-main">Dashboard Command</h2>
+      <p class="mt-1 text-sm text-olive uppercase tracking-wider font-medium">Real-time Operational Snapshot</p>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 h-auto lg:h-[420px]">
+    <div class="lg:col-span-3">
+      <div class="h-full rounded-lg border border-surface-highlight bg-surface p-6 shadow-xl">
+        <p class="text-sm font-bold text-text-muted uppercase tracking-wider font-display">Active Devices</p>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span id="kpi-active-devices" class="text-8xl font-bold text-primary font-mono tracking-tighter leading-none">--</span>
+          <span class="text-olive font-mono text-lg font-medium">/ <span id="kpi-capacity">60</span> CAP</span>
+        </div>
+        <div class="mt-6 text-sm text-text-main">Current Load <span id="kpi-load" class="text-xs font-mono text-primary ml-2">--</span></div>
+      </div>
+    </div>
+
+    <div class="lg:col-span-6">
+      <div class="h-full rounded-lg border border-surface-highlight bg-surface p-6 shadow-xl flex flex-col">
+        <div class="flex items-center justify-between mb-4">
+          <p class="text-sm font-bold text-text-muted uppercase tracking-wider font-display">Live Traffic (Hourly Peak)</p>
+          <span id="kpi-hourly-avg" class="text-sm font-mono text-primary">Avg: --</span>
+        </div>
+        <div class="flex-1 overflow-auto">
+          <table class="w-full text-xs font-mono">
+            <thead class="text-text-muted">
+              <tr><th class="text-left py-2">Hour</th><th class="text-right py-2">Peak</th><th class="text-right py-2">Avg</th></tr>
+            </thead>
+            <tbody id="dashboard-hourly-body" class="text-text-main">
+              <tr><td class="py-2" colspan="3">Waiting for series...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="lg:col-span-3">
+      <div class="h-full rounded-lg border border-surface-highlight bg-surface p-5 shadow-xl">
+        <div class="flex items-center justify-between border-b border-surface-highlight pb-3 mb-4">
+          <span class="text-sm font-bold text-text-muted uppercase font-display">System Health</span>
+          <span class="material-symbols-outlined text-olive">memory</span>
+        </div>
+        <div class="space-y-3 text-sm">
+          <div class="flex justify-between"><span>Sensor</span><span id="kpi-sensor-status" class="font-mono text-status-green">CONNECTED</span></div>
+          <div class="flex justify-between"><span>Last Raw Count</span><span id="kpi-raw" class="font-mono text-primary">--</span></div>
+          <div class="flex justify-between"><span>Last Timestamp</span><span id="kpi-ts" class="font-mono text-text-muted">--</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section class="rounded-lg border border-surface-highlight bg-surface p-6 shadow-xl">
+    <h3 class="text-sm font-bold text-text-muted uppercase tracking-wider font-display mb-4">Recent Captures</h3>
+    <div class="overflow-auto">
+      <table class="w-full text-sm">
+        <thead class="text-text-muted text-xs uppercase">
+          <tr><th class="text-left py-2">Timestamp</th><th class="text-right py-2">Unique</th><th class="text-right py-2">Raw</th></tr>
+        </thead>
+        <tbody id="dashboard-latest-body" class="font-mono text-text-main">
+          <tr><td class="py-2" colspan="3">Waiting for observations...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+{% endblock %}

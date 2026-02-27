@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}RpiPulse{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;500;700&family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" />
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "primary": "#D69E1C",
+            "primary-dim": "rgba(214, 158, 28, 0.1)",
+            "olive": "#614D1F",
+            "olive-light": "#8c7335",
+            "bg-dark": "#121212",
+            "background-dark": "#121212",
+            "surface": "#1E1E1E",
+            "surface-highlight": "#2A2A2A",
+            "text-main": "#EAEAEA",
+            "text-muted": "#888888",
+            "accent-red": "#C0392B",
+            "accent": "#C0392B",
+            "status-green": "#27AE60"
+          },
+          fontFamily: {
+            "display": ["Space Grotesk", "sans-serif"],
+            "body": ["DM Sans", "sans-serif"],
+            "mono": ["JetBrains Mono", "monospace"]
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #121212; }
+    ::-webkit-scrollbar-thumb { background: #2A2A2A; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #614D1F; }
+    {% block page_styles %}{% endblock %}
+  </style>
+  {% block head_extra %}{% endblock %}
+</head>
+<body class="{% block body_class %}bg-bg-dark text-text-main font-body min-h-screen{% endblock %}">
+  {% block content %}{% endblock %}
+  <script src="/static/app.js"></script>
+  {% block page_scripts %}{% endblock %}
+</body>
+</html>

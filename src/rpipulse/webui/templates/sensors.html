@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% from "_nav.html" import side_nav %}
+
+{% block title %}RpiPulse - Sensor Configuration{% endblock %}
+{% block body_class %}bg-background-dark text-text-main font-body h-screen flex flex-col overflow-hidden selection:bg-primary selection:text-black{% endblock %}
+
+{% block content %}
+<div class="flex flex-1 h-full overflow-hidden" data-page="sensors">
+  <aside class="w-20 lg:w-64 bg-background-dark border-r border-surface-highlight flex flex-col justify-between shrink-0 transition-all duration-300">
+    <div class="flex flex-col h-full">
+      <div class="h-16 flex items-center px-4 lg:px-6 border-b border-surface-highlight">
+        <div class="flex gap-3 items-center">
+          <div class="bg-primary/20 rounded-lg p-1.5 flex items-center justify-center text-primary"><span class="material-symbols-outlined text-2xl">sensors</span></div>
+          <div class="hidden lg:flex flex-col">
+            <h1 class="text-white text-base font-display font-bold leading-none tracking-tight">RpiPulse</h1>
+            <p class="text-primary text-xs font-mono mt-1">GOLDEN FLOW v1.0</p>
+          </div>
+        </div>
+      </div>
+      {{ side_nav('sensors') }}
+    </div>
+  </aside>
+
+  <main class="flex-1 overflow-y-auto bg-background-dark relative">
+    <div class="max-w-3xl mx-auto px-6 py-12 relative z-10">
+      <div class="mb-10 text-center">
+        <h1 class="text-3xl font-display font-bold text-white mb-2 tracking-tight">Sensor Configuration</h1>
+        <p class="text-text-muted font-body">Manage hardware pairing, signal calibration, and retention policies.</p>
+      </div>
+      <div class="flex flex-col gap-8">
+        <div class="bg-surface border border-surface-highlight rounded-lg shadow-xl overflow-hidden">
+          <div class="px-6 py-4 border-b border-surface-highlight bg-surface-highlight/30 flex justify-between items-center">
+            <h2 class="text-lg font-display font-medium text-white flex items-center gap-2"><span class="material-symbols-outlined text-primary" style="font-size: 20px;">router</span>Device Connection</h2>
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-900/30 text-green-400 text-xs font-mono border border-green-800">CONNECTED</span>
+          </div>
+          <div class="p-6 grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
+            <label class="block"><span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">IP Address</span><input class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" value="192.168.1.105" /></label>
+            <label class="block"><span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">Port</span><input class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" value="8080" /></label>
+            <button class="h-10 px-6 bg-primary hover:bg-yellow-500 text-black font-medium text-sm rounded transition-colors">Test Ping</button>
+          </div>
+        </div>
+
+        <div class="bg-surface border border-surface-highlight rounded-lg shadow-xl overflow-hidden p-6">
+          <h2 class="text-lg font-display font-medium text-white mb-4">Signal Calibration</h2>
+          <div class="space-y-6">
+            <label class="block"><span class="block text-sm text-white mb-2">Scan Interval</span><input class="w-full" type="range" min="1" max="60" value="5" /></label>
+            <label class="block"><span class="block text-sm text-white mb-2">Proximity Threshold (RSSI)</span><input class="w-full" type="range" min="-100" max="-40" value="-85" /></label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+{% endblock %}

@@ -125,11 +125,17 @@ rpipulse ui --host 0.0.0.0 --port 8000
 
 Rutas principales:
 
-- `/` (dashboard web)
-- `/api/health`
-- `/api/observations/latest`
-- `/api/series/daily?days=30`
-- `/api/series/hourly?days=7`
+- `/` → redirect a `/dashboard`
+- `/dashboard` → Dashboard Command (KPIs + resumen horario + observaciones recientes)
+- `/trends` → Trend Intelligence (tabla diaria/horaria + gráfico Chart.js)
+- `/monitor` → Signal Monitor (tabla de observaciones + stream SSE)
+- `/sensors` → Sensor Config (configuración visual placeholder)
+
+Endpoints usados por la UI:
+
 - `/api/kpis/now`
-- `/api/stream/observations` (SSE, opcional)
+- `/api/series/daily`
+- `/api/series/hourly`
+- `/api/observations/latest?limit=20`
+- `/api/stream/observations` (SSE)
 

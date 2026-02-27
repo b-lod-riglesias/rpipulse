@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% from "_nav.html" import top_nav %}
+
+{% block title %}RpiPulse - Trend Intelligence{% endblock %}
+{% block body_class %}bg-bg-dark text-text-main font-body min-h-screen flex flex-col overflow-x-hidden selection:bg-primary selection:text-bg-dark{% endblock %}
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% endblock %}
+
+{% block content %}
+<header class="sticky top-0 z-50 w-full border-b border-surface-highlight bg-bg-dark/95 backdrop-blur-sm">
+  <div class="flex h-16 items-center justify-between px-6 lg:px-8">
+    <div class="flex items-center gap-4">
+      <div class="flex size-8 items-center justify-center rounded-lg bg-primary/20 text-primary">
+        <span class="material-symbols-outlined">insights</span>
+      </div>
+      <h1 class="text-xl font-bold tracking-tight font-display text-text-main">RpiPulse</h1>
+    </div>
+    {{ top_nav('trends') }}
+  </div>
+</header>
+
+<main class="flex-1 p-6 md:p-8 lg:px-12 max-w-[1600px] mx-auto w-full flex flex-col gap-6" data-page="trends">
+  <section class="rounded-lg border border-surface-highlight bg-surface p-6 shadow-xl">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-2xl font-display font-bold">Trend Intelligence</h2>
+      <span class="text-xs font-mono text-text-muted">Last update from API</span>
+    </div>
+    <div class="h-[360px]">
+      <canvas id="trends-chart"></canvas>
+    </div>
+    <p id="trends-chart-note" class="text-xs font-mono text-text-muted mt-3">Rendering daily peak series...</p>
+  </section>
+
+  <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div class="rounded-lg border border-surface-highlight bg-surface p-6 shadow-xl overflow-auto">
+      <h3 class="text-sm font-bold text-text-muted uppercase tracking-wider font-display mb-4">Daily Series</h3>
+      <table class="w-full text-sm font-mono">
+        <thead class="text-xs uppercase text-text-muted">
+          <tr><th class="text-left py-2">Day</th><th class="text-right py-2">Peak</th><th class="text-right py-2">Avg</th><th class="text-right py-2">Raw Peak</th></tr>
+        </thead>
+        <tbody id="trends-daily-body">
+          <tr><td colspan="4" class="py-2">Waiting for daily series...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="rounded-lg border border-surface-highlight bg-surface p-6 shadow-xl overflow-auto">
+      <h3 class="text-sm font-bold text-text-muted uppercase tracking-wider font-display mb-4">Hourly Series</h3>
+      <table class="w-full text-sm font-mono">
+        <thead class="text-xs uppercase text-text-muted">
+          <tr><th class="text-left py-2">Hour</th><th class="text-right py-2">Peak</th><th class="text-right py-2">Avg</th><th class="text-right py-2">Raw Peak</th></tr>
+        </thead>
+        <tbody id="trends-hourly-body">
+          <tr><td colspan="4" class="py-2">Waiting for hourly series...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+{% endblock %}

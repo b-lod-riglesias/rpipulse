@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% from "_nav.html" import side_nav %}
+
+{% block title %}RpiPulse - Signal Monitor{% endblock %}
+{% block body_class %}bg-background-dark text-text-main font-body h-screen flex flex-col overflow-hidden selection:bg-primary selection:text-black{% endblock %}
+
+{% block page_styles %}
+@keyframes fadeInRow { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+.new-row { animation: fadeInRow 0.3s ease-out forwards; }
+{% endblock %}
+
+{% block content %}
+<div class="flex flex-1 h-full overflow-hidden" data-page="monitor">
+  <aside class="w-20 lg:w-64 bg-background-dark border-r border-surface-highlight flex flex-col justify-between shrink-0 transition-all duration-300">
+    <div class="flex flex-col h-full">
+      <div class="h-16 flex items-center px-4 lg:px-6 border-b border-surface-highlight">
+        <div class="flex gap-3 items-center">
+          <div class="bg-primary/20 rounded-lg p-1.5 flex items-center justify-center text-primary"><span class="material-symbols-outlined text-2xl">sensors</span></div>
+          <div class="hidden lg:flex flex-col">
+            <h1 class="text-white text-base font-display font-bold leading-none tracking-tight">RpiPulse</h1>
+            <p class="text-primary text-xs font-mono mt-1">GOLDEN FLOW v1.0</p>
+          </div>
+        </div>
+      </div>
+      {{ side_nav('monitor') }}
+    </div>
+  </aside>
+
+  <main class="flex-1 flex flex-col min-w-0 bg-[#0F0F0F] relative">
+    <header class="h-16 border-b border-surface-highlight bg-background-dark/95 backdrop-blur flex items-center justify-between px-6 sticky top-0 z-30">
+      <h2 class="text-xl font-display font-bold text-white tracking-tight">Signal Monitor</h2>
+      <div class="flex items-center gap-3 text-xs font-mono text-text-muted">
+        <span>Mode: LIVE</span>
+        <span id="monitor-stream-state" class="text-primary">Connecting...</span>
+      </div>
+    </header>
+    <div class="flex-1 overflow-auto p-6">
+      <div class="rounded-lg border border-surface-highlight bg-surface shadow-xl overflow-hidden">
+        <table class="w-full text-sm font-mono">
+          <thead class="bg-background-dark text-xs uppercase text-text-muted">
+            <tr>
+              <th class="text-left p-3">Timestamp</th>
+              <th class="text-right p-3">Unique Devices</th>
+              <th class="text-right p-3">Raw Count</th>
+            </tr>
+          </thead>
+          <tbody id="monitor-observations-body" class="divide-y divide-surface-highlight/80">
+            <tr><td class="p-3" colspan="3">Waiting for observation stream...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+{% endblock %}

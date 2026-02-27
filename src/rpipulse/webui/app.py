@@ -8,11 +8,20 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from rpipulse.db import DAY_MS, HOUR_MS, DEFAULT_DB_PATH, get_connection, init_db
+from rpipulse.db import (
+    DAY_MS,
+    DEFAULT_DB_PATH,
+    daily_peak_and_avg,
+    get_connection,
+    hourly_peak_and_avg,
+    init_db,
+    latest_observation,
+    latest_observations,
+)
 
 WEBUI_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = WEBUI_DIR / "templates"
@@ -26,110 +35,52 @@ def resolve_db_path(override: Path | None = None) -> Path:
     return Path(env_path) if env_path else DEFAULT_DB_PATH
 
 
-def _to_iso(ts_ms: int) -> str:
+def _to_iso(ts_ms: int | None) -> str | None:
+    if ts_ms is None:
+        return None
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _latest_observation(db_path: Path) -> dict[str, Any] | None:
-    init_db(db_path)
-    with get_connection(db_path) as conn:
-        row = conn.execute(
-            """
-            SELECT ts_ms, unique_devices_count, raw_count
-            FROM observations
-            ORDER BY ts_ms DESC
-            LIMIT 1
-            """
-        ).fetchone()
-
+def _with_iso(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if row is None:
         return None
-
-    return {
-        "ts_ms": int(row[0]),
-        "timestamp": _to_iso(int(row[0])),
-        "unique_devices_count": int(row[1]),
-        "raw_count": 0 if row[2] is None else int(row[2]),
-    }
-
-
-def _series_daily(db_path: Path, days: int) -> list[dict[str, Any]]:
-    init_db(db_path)
-    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-    from_ms = now_ms - (days * DAY_MS)
-
-    with get_connection(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                ((ts_ms / 86400000) * 86400000) AS day_start_ms,
-                COALESCE(MAX(unique_devices_count), 0) AS peak_unique,
-                COALESCE(AVG(unique_devices_count), 0) AS avg_unique,
-                COALESCE(MAX(raw_count), 0) AS peak_raw,
-                COALESCE(AVG(raw_count), 0) AS avg_raw
-            FROM observations
-            WHERE ts_ms >= ?
-            GROUP BY ((ts_ms / 86400000) * 86400000)
-            ORDER BY day_start_ms ASC
-            """,
-            (from_ms,),
-        ).fetchall()
-
-    return [
-        {
-            "day": datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc).strftime("%Y-%m-%d"),
-            "day_start_ms": int(row[0]),
-            "peak_unique": int(row[1]),
-            "avg_unique": float(row[2]),
-            "peak_raw": int(row[3]),
-            "avg_raw": float(row[4]),
-        }
-        for row in rows
-    ]
-
-
-def _series_hourly(db_path: Path, days: int) -> list[dict[str, Any]]:
-    init_db(db_path)
-    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-    from_ms = now_ms - (days * DAY_MS)
-
-    with get_connection(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                ((ts_ms / 3600000) * 3600000) AS hour_start_ms,
-                COALESCE(MAX(unique_devices_count), 0) AS peak_unique,
-                COALESCE(AVG(unique_devices_count), 0) AS avg_unique,
-                COALESCE(MAX(raw_count), 0) AS peak_raw,
-                COALESCE(AVG(raw_count), 0) AS avg_raw
-            FROM observations
-            WHERE ts_ms >= ?
-            GROUP BY ((ts_ms / 3600000) * 3600000)
-            ORDER BY hour_start_ms ASC
-            """,
-            (from_ms,),
-        ).fetchall()
-
-    return [
-        {
-            "hour": datetime.fromtimestamp(int(row[0]) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:00"),
-            "hour_start_ms": int(row[0]),
-            "peak_unique": int(row[1]),
-            "avg_unique": float(row[2]),
-            "peak_raw": int(row[3]),
-            "avg_raw": float(row[4]),
-        }
-        for row in rows
-    ]
+    return {**row, "ts_iso": _to_iso(row.get("ts_ms"))}
 
 
 def _kpis_now(db_path: Path) -> dict[str, Any]:
     init_db(db_path)
-    latest = _latest_observation(db_path)
+    latest = latest_observation(db_path=db_path)
+    hourly = hourly_peak_and_avg(db_path=db_path)
+    latest_hourly = hourly[-1] if hourly else None
+
+    capacity = 60
+    if latest is None:
+        return {
+            "observation": None,
+            "hourly": latest_hourly,
+            "capacity": capacity,
+            "status": "unknown",
+            "latest": None,
+            "last_24h": {"samples": 0, "avg_unique": 0.0, "peak_unique": 0, "avg_raw": 0.0, "peak_raw": 0},
+            "trend": {"avg_last_60m": 0.0, "avg_prev_60m": 0.0, "delta_pct": None},
+        }
+
+    load_pct = round((latest["unique_devices_count"] / capacity) * 100, 1) if capacity else None
+    if load_pct is None:
+        status = "unknown"
+    elif load_pct < 25:
+        status = "quiet"
+    elif load_pct < 60:
+        status = "moderate"
+    elif load_pct < 85:
+        status = "busy"
+    else:
+        status = "packed"
+
     now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-    from_24h = now_ms - (24 * HOUR_MS)
-    from_60m = now_ms - HOUR_MS
-    from_120m = now_ms - (2 * HOUR_MS)
+    from_24h = now_ms - DAY_MS
+    from_120m = now_ms - (2 * 3_600_000)
+    from_60m = now_ms - 3_600_000
 
     with get_connection(db_path) as conn:
         row_24h = conn.execute(
@@ -145,7 +96,6 @@ def _kpis_now(db_path: Path) -> dict[str, Any]:
             """,
             (from_24h,),
         ).fetchone()
-
         row_trend = conn.execute(
             """
             SELECT
@@ -161,8 +111,16 @@ def _kpis_now(db_path: Path) -> dict[str, Any]:
     avg_prev_60m = float(row_trend[1])
     delta_pct = None if avg_prev_60m == 0 else ((avg_last_60m - avg_prev_60m) / avg_prev_60m) * 100
 
+    observation = _with_iso(latest)
+    if observation is not None:
+        observation["load_pct"] = load_pct
+
     return {
-        "latest": latest,
+        "observation": observation,
+        "hourly": latest_hourly,
+        "capacity": capacity,
+        "status": status,
+        "latest": observation,
         "last_24h": {
             "samples": int(row_24h[0]),
             "avg_unique": float(row_24h[1]),
@@ -179,55 +137,66 @@ def _kpis_now(db_path: Path) -> dict[str, Any]:
 
 
 def create_app(db_path: Path | None = None) -> FastAPI:
-    app = FastAPI(title="RPIpulse Web UI", version="0.1.0")
+    app = FastAPI(title="RPIpulse Web UI", version="1.0.0")
     app.state.db_path = resolve_db_path(db_path)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
     @app.get("/", response_class=HTMLResponse)
-    def index(request: Request) -> HTMLResponse:
-        return templates.TemplateResponse(request, "index.html")
+    def root() -> RedirectResponse:
+        return RedirectResponse(url="/dashboard", status_code=302)
 
-    @app.get("/api/health")
-    def api_health() -> dict[str, Any]:
-        db_path_value: Path = app.state.db_path
-        init_db(db_path_value)
-        with get_connection(db_path_value) as conn:
-            observations = conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
+    @app.get("/dashboard", response_class=HTMLResponse)
+    def dashboard(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(request, "dashboard.html")
 
-        return {
-            "status": "ok",
-            "db_path": str(db_path_value),
-            "db_exists": db_path_value.exists(),
-            "observations": int(observations),
-            "utc_now": datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z"),
-        }
+    @app.get("/trends", response_class=HTMLResponse)
+    def trends(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(request, "trends.html")
+
+    @app.get("/monitor", response_class=HTMLResponse)
+    def monitor(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(request, "monitor.html")
+
+    @app.get("/sensors", response_class=HTMLResponse)
+    def sensors(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(request, "sensors.html")
 
     @app.get("/api/observations/latest")
-    def api_latest_observation() -> dict[str, Any]:
-        return {"observation": _latest_observation(app.state.db_path)}
+    def api_observations_latest(limit: int = Query(default=20, ge=1, le=500)) -> dict[str, Any]:
+        items = [_with_iso(row) for row in latest_observations(limit=limit, db_path=app.state.db_path)]
+        items = [row for row in items if row is not None]
+        return {"items": items, "observation": items[0] if items else None}
 
     @app.get("/api/series/daily")
-    def api_daily_series(days: int = Query(default=30, ge=1, le=365)) -> dict[str, Any]:
-        return {"days": days, "series": _series_daily(app.state.db_path, days)}
+    def api_daily_series() -> dict[str, Any]:
+        items = daily_peak_and_avg(db_path=app.state.db_path)
+        return {"items": items, "series": items}
 
     @app.get("/api/series/hourly")
-    def api_hourly_series(days: int = Query(default=7, ge=1, le=60)) -> dict[str, Any]:
-        return {"days": days, "series": _series_hourly(app.state.db_path, days)}
+    def api_hourly_series() -> dict[str, Any]:
+        items = hourly_peak_and_avg(db_path=app.state.db_path)
+        return {"items": items, "series": items}
 
     @app.get("/api/kpis/now")
     def api_kpis_now() -> dict[str, Any]:
         return _kpis_now(app.state.db_path)
 
     @app.get("/api/stream/observations")
-    async def api_observations_stream(request: Request, interval_s: float = Query(default=3.0, ge=2.0, le=5.0)) -> StreamingResponse:
+    async def api_observations_stream(request: Request, interval_s: float = Query(default=3.0, ge=1.0, le=10.0)) -> StreamingResponse:
         async def event_stream() -> Any:
+            last_ts_ms: int | None = None
             while True:
                 if await request.is_disconnected():
                     break
-                payload = {"observation": _latest_observation(app.state.db_path)}
-                yield f"event: observation\ndata: {json.dumps(payload)}\n\n"
+                obs = latest_observation(db_path=app.state.db_path)
+                if obs is not None and obs.get("ts_ms") != last_ts_ms:
+                    last_ts_ms = obs.get("ts_ms")
+                    payload = _with_iso(obs)
+                    yield f"event: observation\ndata: {json.dumps(payload)}\n\n"
+                else:
+                    yield "event: heartbeat\ndata: {}\n\n"
                 await asyncio.sleep(interval_s)
 
         return StreamingResponse(

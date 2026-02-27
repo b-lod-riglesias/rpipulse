@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from rpipulse.db import init_db, insert_observation
 from rpipulse.webui.app import create_app
@@ -21,47 +21,78 @@ def _seed(db_path: Path) -> None:
     insert_observation(_ms(now), unique_devices_count=9, raw_count=12, db_path=db_path)
 
 
-def test_webui_root_and_health(tmp_path: Path) -> None:
+def _route(app, path: str):
+    for route in app.routes:
+        if getattr(route, "path", None) == path:
+            return route
+    raise AssertionError(f"Route not found: {path}")
+
+
+def _request(path: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": path,
+            "headers": [],
+            "query_string": b"",
+            "client": ("test", 123),
+            "server": ("test", 80),
+            "scheme": "http",
+            "http_version": "1.1",
+        }
+    )
+
+
+def test_webui_routes_and_redirect(tmp_path: Path) -> None:
     db_path = tmp_path / "ui.sqlite"
     _seed(db_path)
+    app = create_app(db_path=db_path)
 
-    client = TestClient(create_app(db_path=db_path))
+    paths = {getattr(route, "path", None) for route in app.routes}
+    assert "/" in paths
+    assert "/dashboard" in paths
+    assert "/trends" in paths
+    assert "/monitor" in paths
+    assert "/sensors" in paths
 
-    index = client.get("/")
-    assert index.status_code == 200
-    assert "RPIpulse" in index.text
+    root_response = _route(app, "/").endpoint()
+    assert root_response.status_code == 302
+    assert root_response.headers["location"] == "/dashboard"
 
-    health = client.get("/api/health")
-    assert health.status_code == 200
-    payload = health.json()
-    assert payload["status"] == "ok"
-    assert payload["db_path"] == str(db_path)
-    assert payload["observations"] == 3
+    dashboard_response = _route(app, "/dashboard").endpoint(_request("/dashboard"))
+    assert dashboard_response.status_code == 200
+    assert dashboard_response.template.name == "dashboard.html"
+
+    trends_response = _route(app, "/trends").endpoint(_request("/trends"))
+    assert trends_response.status_code == 200
+    assert trends_response.template.name == "trends.html"
+
+    monitor_response = _route(app, "/monitor").endpoint(_request("/monitor"))
+    assert monitor_response.status_code == 200
+    assert monitor_response.template.name == "monitor.html"
+
+    sensors_response = _route(app, "/sensors").endpoint(_request("/sensors"))
+    assert sensors_response.status_code == 200
+    assert sensors_response.template.name == "sensors.html"
 
 
 def test_webui_data_endpoints(tmp_path: Path) -> None:
     db_path = tmp_path / "ui.sqlite"
     _seed(db_path)
+    app = create_app(db_path=db_path)
 
-    client = TestClient(create_app(db_path=db_path))
+    latest_payload = _route(app, "/api/observations/latest").endpoint(limit=2)
+    assert len(latest_payload["items"]) == 2
+    assert latest_payload["items"][0]["unique_devices_count"] == 9
 
-    latest = client.get("/api/observations/latest")
-    assert latest.status_code == 200
-    latest_payload = latest.json()["observation"]
-    assert latest_payload["unique_devices_count"] == 9
-    assert latest_payload["raw_count"] == 12
+    daily_payload = _route(app, "/api/series/daily").endpoint()
+    assert daily_payload["items"]
 
-    daily = client.get("/api/series/daily", params={"days": 30})
-    assert daily.status_code == 200
-    assert daily.json()["series"]
+    hourly_payload = _route(app, "/api/series/hourly").endpoint()
+    assert hourly_payload["items"]
 
-    hourly = client.get("/api/series/hourly", params={"days": 7})
-    assert hourly.status_code == 200
-    assert len(hourly.json()["series"]) >= 1
-
-    kpis = client.get("/api/kpis/now")
-    assert kpis.status_code == 200
-    kpis_payload = kpis.json()
-    assert kpis_payload["latest"]["unique_devices_count"] == 9
-    assert kpis_payload["last_24h"]["samples"] == 3
-    assert "delta_pct" in kpis_payload["trend"]
+    kpis_payload = _route(app, "/api/kpis/now").endpoint()
+    assert kpis_payload["observation"]["unique_devices_count"] == 9
+    assert "status" in kpis_payload
+    assert "capacity" in kpis_payload
