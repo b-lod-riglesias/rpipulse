@@ -25,28 +25,45 @@
     <div class="max-w-3xl mx-auto px-6 py-12 relative z-10">
       <div class="mb-10 text-center">
         <h1 class="text-3xl font-display font-bold text-white mb-2 tracking-tight">Sensor Configuration</h1>
-        <p class="text-text-muted font-body">Manage hardware pairing, signal calibration, and retention policies.</p>
+        <p class="text-text-muted font-body">Config bound to <code class="text-primary">GET/PUT /api/config</code>.</p>
       </div>
-      <div class="flex flex-col gap-8">
-        <div class="bg-surface border border-surface-highlight rounded-lg shadow-xl overflow-hidden">
-          <div class="px-6 py-4 border-b border-surface-highlight bg-surface-highlight/30 flex justify-between items-center">
-            <h2 class="text-lg font-display font-medium text-white flex items-center gap-2"><span class="material-symbols-outlined text-primary" style="font-size: 20px;">router</span>Device Connection</h2>
-            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-900/30 text-green-400 text-xs font-mono border border-green-800">CONNECTED</span>
-          </div>
-          <div class="p-6 grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
-            <label class="block"><span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">IP Address</span><input class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" value="192.168.1.105" /></label>
-            <label class="block"><span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">Port</span><input class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" value="8080" /></label>
-            <button class="h-10 px-6 bg-primary hover:bg-yellow-500 text-black font-medium text-sm rounded transition-colors">Test Ping</button>
-          </div>
+
+      <div class="bg-surface border border-surface-highlight rounded-lg shadow-xl overflow-hidden">
+        <div class="px-6 py-4 border-b border-surface-highlight bg-surface-highlight/30 flex flex-wrap justify-between items-center gap-3">
+          <h2 class="text-lg font-display font-medium text-white flex items-center gap-2">
+            <span class="material-symbols-outlined text-primary" style="font-size: 20px;">settings</span>
+            Scanner Runtime Config
+          </h2>
+          <span class="text-xs font-mono text-text-muted">Last loaded: <span id="sensors-last-loaded">--</span></span>
         </div>
 
-        <div class="bg-surface border border-surface-highlight rounded-lg shadow-xl overflow-hidden p-6">
-          <h2 class="text-lg font-display font-medium text-white mb-4">Signal Calibration</h2>
-          <div class="space-y-6">
-            <label class="block"><span class="block text-sm text-white mb-2">Scan Interval</span><input class="w-full" type="range" min="1" max="60" value="5" /></label>
-            <label class="block"><span class="block text-sm text-white mb-2">Proximity Threshold (RSSI)</span><input class="w-full" type="range" min="-100" max="-40" value="-85" /></label>
+        <form id="sensors-config-form" class="p-6 grid grid-cols-1 sm:grid-cols-2 gap-5">
+          <label class="block">
+            <span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">scan_interval_s</span>
+            <input id="scan_interval_s" name="scan_interval_s" type="number" min="1" step="1" required class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" />
+          </label>
+
+          <label class="block">
+            <span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">scan_duration_s</span>
+            <input id="scan_duration_s" name="scan_duration_s" type="number" min="1" step="1" required class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" />
+          </label>
+
+          <label class="block">
+            <span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">rssi_min_dbm</span>
+            <input id="rssi_min_dbm" name="rssi_min_dbm" type="number" min="-120" max="0" step="1" required class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" />
+          </label>
+
+          <label class="block">
+            <span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">retention_days</span>
+            <input id="retention_days" name="retention_days" type="number" min="1" step="1" required class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" />
+          </label>
+
+          <div class="sm:col-span-2 flex items-center gap-3 mt-2">
+            <button id="sensors-save-btn" type="submit" class="h-10 px-6 bg-primary hover:bg-yellow-500 text-black font-medium text-sm rounded transition-colors disabled:opacity-60">Save Config</button>
+            <button id="sensors-reload-btn" type="button" class="h-10 px-6 border border-surface-highlight text-text-main hover:bg-surface-highlight text-sm rounded transition-colors">Reload</button>
+            <p id="sensors-status" class="text-sm font-mono text-text-muted">Waiting for /api/config...</p>
           </div>
-        </div>
+        </form>
       </div>
     </div>
   </main>
