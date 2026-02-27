@@ -16,14 +16,35 @@ def _ms(dt: datetime) -> int:
 def _seed(db_path: Path) -> None:
     now = datetime.now(tz=timezone.utc)
     init_db(db_path)
-    insert_observation(_ms(now - timedelta(hours=2)), unique_devices_count=3, raw_count=5, db_path=db_path)
-    insert_observation(_ms(now - timedelta(hours=1)), unique_devices_count=6, raw_count=8, db_path=db_path)
-    insert_observation(_ms(now), unique_devices_count=9, raw_count=12, db_path=db_path)
+    insert_observation(
+        _ms(now - timedelta(hours=2)),
+        unique_devices_count=3,
+        raw_count=5,
+        db_path=db_path,
+        detections=[{"address": "AA:AA:AA:AA:AA:01", "rssi": -70, "seen_count": 2, "offsets_ms": [100, 200]}],
+    )
+    insert_observation(
+        _ms(now - timedelta(hours=1)),
+        unique_devices_count=6,
+        raw_count=8,
+        db_path=db_path,
+        detections=[{"address": "AA:AA:AA:AA:AA:02", "rssi": -60, "seen_count": 1, "offsets_ms": [300]}],
+    )
+    insert_observation(
+        _ms(now),
+        unique_devices_count=9,
+        raw_count=12,
+        db_path=db_path,
+        detections=[
+            {"address": "AA:AA:AA:AA:AA:01", "rssi": -50, "seen_count": 3, "offsets_ms": [120, 240, 360]},
+            {"address": "AA:AA:AA:AA:AA:03", "rssi": -65, "seen_count": 1, "offsets_ms": [90]},
+        ],
+    )
 
 
-def _route(app, path: str):
+def _route(app, path: str, method: str = "GET"):
     for route in app.routes:
-        if getattr(route, "path", None) == path:
+        if getattr(route, "path", None) == path and method in getattr(route, "methods", {method}):
             return route
     raise AssertionError(f"Route not found: {path}")
 
@@ -96,3 +117,24 @@ def test_webui_data_endpoints(tmp_path: Path) -> None:
     assert kpis_payload["observation"]["unique_devices_count"] == 9
     assert "status" in kpis_payload
     assert "capacity" in kpis_payload
+
+
+def test_webui_detection_and_config_endpoints(tmp_path: Path) -> None:
+    db_path = tmp_path / "ui.sqlite"
+    _seed(db_path)
+    app = create_app(db_path=db_path)
+    recent_payload = _route(app, "/api/detections/recent").endpoint(seconds=24 * 3600, limit=20)
+    assert len(recent_payload["items"]) >= 3
+    assert all("anon_device_id" in item for item in recent_payload["items"])
+
+    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    top_payload = _route(app, "/api/detections/top").endpoint(from_ms=now_ms - (24 * 3600 * 1000), to_ms=now_ms, limit=20)
+    assert top_payload["items"]
+    assert top_payload["items"][0]["observations"] >= 1
+
+    config_before = _route(app, "/api/config", method="GET").endpoint()
+    assert config_before["config"]["duration"] == 15
+
+    config_after = _route(app, "/api/config", method="PUT").endpoint(payload={"duration": 21, "retention_days": 11})
+    assert config_after["config"]["duration"] == 21
+    assert config_after["config"]["retention_days"] == 11

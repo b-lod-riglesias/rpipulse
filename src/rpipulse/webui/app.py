@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -17,10 +17,15 @@ from rpipulse.db import (
     DEFAULT_DB_PATH,
     daily_peak_and_avg,
     get_connection,
+    get_sensor_config,
     hourly_peak_and_avg,
     init_db,
+    latest_detections,
     latest_observation,
     latest_observations,
+    purge_old_data,
+    top_detections,
+    update_sensor_config,
 )
 
 WEBUI_DIR = Path(__file__).resolve().parent
@@ -44,7 +49,10 @@ def _to_iso(ts_ms: int | None) -> str | None:
 def _with_iso(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if row is None:
         return None
-    return {**row, "ts_iso": _to_iso(row.get("ts_ms"))}
+    ts_ms = row.get("ts_ms")
+    if ts_ms is None:
+        ts_ms = row.get("created_at_ms")
+    return {**row, "ts_iso": _to_iso(ts_ms)}
 
 
 def _kpis_now(db_path: Path) -> dict[str, Any]:
@@ -143,6 +151,11 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
+    @app.on_event("startup")
+    async def _on_startup() -> None:
+        init_db(app.state.db_path)
+        purge_old_data(db_path=app.state.db_path)
+
     @app.get("/", response_class=HTMLResponse)
     def root() -> RedirectResponse:
         return RedirectResponse(url="/dashboard", status_code=302)
@@ -168,6 +181,42 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         items = [_with_iso(row) for row in latest_observations(limit=limit, db_path=app.state.db_path)]
         items = [row for row in items if row is not None]
         return {"items": items, "observation": items[0] if items else None}
+
+    @app.get("/api/detections/recent")
+    def api_detections_recent(
+        seconds: int = Query(default=300, ge=1, le=86_400),
+        limit: int = Query(default=200, ge=1, le=1_000),
+    ) -> dict[str, Any]:
+        items = [_with_iso(row) for row in latest_detections(seconds=seconds, limit=limit, db_path=app.state.db_path)]
+        items = [row for row in items if row is not None]
+        return {"items": items}
+
+    @app.get("/api/detections/top")
+    def api_detections_top(
+        from_ms: int = Query(...),
+        to_ms: int = Query(...),
+        limit: int = Query(default=50, ge=1, le=500),
+    ) -> dict[str, Any]:
+        if to_ms < from_ms:
+            raise HTTPException(status_code=400, detail="to_ms must be >= from_ms")
+        items = top_detections(from_ms=from_ms, to_ms=to_ms, limit=limit, db_path=app.state.db_path)
+        return {"items": items}
+
+    @app.get("/api/config")
+    def api_config_get() -> dict[str, Any]:
+        return {"config": get_sensor_config(db_path=app.state.db_path)}
+
+    @app.put("/api/config")
+    def api_config_put(payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            updates: dict[str, int] = {}
+            for key in ("duration", "interval", "rssi_threshold", "retention_days"):
+                if key in payload:
+                    updates[key] = int(payload[key])
+            config = update_sensor_config(updates=updates, db_path=app.state.db_path)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"config": config}
 
     @app.get("/api/series/daily")
     def api_daily_series() -> dict[str, Any]:
