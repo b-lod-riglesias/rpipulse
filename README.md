@@ -108,3 +108,28 @@ Ruta por defecto:
 - Persistencia en `ts_ms` (epoch ms UTC) con índices de tiempo.
 - Compatibilidad de CLI vía alias `analizador`.
 - Tests con `pytest` en verde.
+
+## Web UI
+
+Instalar dependencias de UI:
+
+```bash
+pip install -e .[ui]
+```
+
+Levantar servidor:
+
+```bash
+rpipulse ui --host 0.0.0.0 --port 8000
+```
+
+Rutas principales:
+
+- `/` (dashboard web)
+- `/api/health`
+- `/api/observations/latest`
+- `/api/series/daily?days=30`
+- `/api/series/hourly?days=7`
+- `/api/kpis/now`
+- `/api/stream/observations` (SSE, opcional)
+

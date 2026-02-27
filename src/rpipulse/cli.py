@@ -51,6 +51,19 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    try:
+        import uvicorn
+    except ImportError as exc:  # pragma: no cover
+        raise SystemExit("Missing UI dependencies. Install with: pip install -e '.[ui]'") from exc
+
+    from rpipulse.webui.app import create_app
+
+    app = create_app(db_path=resolve_db_path())
+    uvicorn.run(app, host=args.host, port=args.port)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rpipulse", description="RPIpulse CLI de escaneo BLE y estadísticas")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -68,6 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     stats_parser.set_defaults(func=cmd_stats)
 
+    ui_parser = sub.add_parser("ui", help="Levanta la Web UI (FastAPI + Uvicorn)")
+    ui_parser.add_argument("--host", default="127.0.0.1", help="Host bind (ej: 127.0.0.1 o 0.0.0.0)")
+    ui_parser.add_argument("--port", type=int, default=8000, help="Puerto HTTP")
+    ui_parser.set_defaults(func=cmd_ui)
+
     return parser
 
 
@@ -76,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "scan" and args.duration < 1:
         parser.error("--duration debe ser >= 1")
+    if args.command == "ui" and not (1 <= args.port <= 65535):
+        parser.error("--port debe estar entre 1 y 65535")
     return args.func(args)
 
 
