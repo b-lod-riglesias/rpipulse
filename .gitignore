@@ -8,5 +8,5 @@ dist/
 build/
 
 # SQLite local data
-data/analizador.sqlite
+data/rpipulse.sqlite
 data/*.sqlite

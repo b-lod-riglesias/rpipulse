@@ -3,12 +3,12 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "analizador"
+name = "rpipulse"
 version = "0.1.0"
 description = "CLI para escaneo BLE y estadísticas locales"
 readme = "README.md"
 requires-python = ">=3.9"
-authors = [{ name = "Analizador" }]
+authors = [{ name = "RPIpulse" }]
 dependencies = []
 
 [project.optional-dependencies]
@@ -16,7 +16,8 @@ ble = ["bleak>=0.22"]
 test = ["pytest>=7.0"]
 
 [project.scripts]
-analizador = "analizador.cli:main"
+rpipulse = "rpipulse.cli:main"
+analizador = "rpipulse.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -26,3 +27,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
