@@ -26,10 +26,33 @@
       <h2 class="text-2xl font-display font-bold">Trend Intelligence</h2>
       <span class="text-xs font-mono text-text-muted">Last update from API</span>
     </div>
-    <div class="h-[360px]">
+    <div class="h-[320px]">
       <canvas id="trends-chart"></canvas>
     </div>
     <p id="trends-chart-note" class="text-xs font-mono text-text-muted mt-3">Rendering daily peak series...</p>
+  </section>
+
+  <section class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+    <div class="rounded-lg border border-surface-highlight bg-surface p-6 shadow-xl overflow-auto xl:col-span-2">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-sm font-bold text-text-muted uppercase tracking-wider font-display">Top Detections (24h)</h3>
+        <span id="trends-top-note" class="text-xs font-mono text-text-muted">Loading...</span>
+      </div>
+      <table class="w-full text-sm font-mono">
+        <thead class="text-xs uppercase text-text-muted">
+          <tr><th class="text-left py-2">Anon Device</th><th class="text-left py-2">Transport</th><th class="text-right py-2">Seen</th><th class="text-right py-2">RSSI</th></tr>
+        </thead>
+        <tbody id="trends-top-detections-body">
+          <tr><td colspan="4" class="py-2">Waiting for detection ranking...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="rounded-lg border border-surface-highlight bg-surface p-6 shadow-xl overflow-auto">
+      <h3 class="text-sm font-bold text-text-muted uppercase tracking-wider font-display mb-4">Transport Mix</h3>
+      <ul id="trends-transport-body" class="text-sm font-mono">
+        <li class="py-2 text-text-muted">Waiting for detection ranking...</li>
+      </ul>
+    </div>
   </section>
 
   <section class="grid grid-cols-1 lg:grid-cols-2 gap-6">

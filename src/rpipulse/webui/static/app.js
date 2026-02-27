@@ -1,21 +1,57 @@
 (function () {
   "use strict";
 
-  async function fetchJson(url) {
+  async function fetchJson(url, options) {
     try {
-      const response = await fetch(url, { headers: { Accept: "application/json" } });
-      if (!response.ok) return null;
+      const response = await fetch(url, {
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        ...(options || {}),
+      });
+      if (!response.ok) {
+        return null;
+      }
       return await response.json();
     } catch (_err) {
       return null;
     }
   }
 
+  async function putJson(url, payload) {
+    try {
+      const response = await fetch(url, {
+        method: "PUT",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(function () {
+        return null;
+      });
+      return { ok: response.ok, status: response.status, data };
+    } catch (_err) {
+      return { ok: false, status: 0, data: null };
+    }
+  }
+
+  function asArray(payload) {
+    if (Array.isArray(payload)) return payload;
+    if (!payload || typeof payload !== "object") return [];
+    if (Array.isArray(payload.items)) return payload.items;
+    if (Array.isArray(payload.series)) return payload.series;
+    if (Array.isArray(payload.detections)) return payload.detections;
+    return [];
+  }
+
   function fmtTs(value) {
-    if (!value) return "--";
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime())) return "--";
-    return d.toLocaleString();
+    if (value === null || value === undefined || value === "") return "--";
+    const date = typeof value === "number" ? new Date(value) : new Date(String(value));
+    if (Number.isNaN(date.getTime())) return "--";
+    return date.toLocaleString();
+  }
+
+  function toNumber(value) {
+    if (value === null || value === undefined || value === "") return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
   }
 
   function setText(id, value, fallback) {
@@ -24,21 +60,50 @@
     node.textContent = value ?? fallback ?? node.textContent;
   }
 
-  function renderRows(tbodyId, rows, rowBuilder, emptyMessage) {
+  function renderRows(tbodyId, rows, rowBuilder, emptyMessage, colSpan) {
     const body = document.getElementById(tbodyId);
     if (!body) return;
     if (!rows || rows.length === 0) {
-      body.innerHTML = `<tr><td class="py-2" colspan="4">${emptyMessage}</td></tr>`;
+      body.innerHTML = `<tr><td class="py-2" colspan="${colSpan || 4}">${emptyMessage}</td></tr>`;
       return;
     }
     body.innerHTML = rows.map(rowBuilder).join("");
   }
 
+  function detectionDeviceId(row) {
+    const raw = row && (row.anon_device_id || row.device_id || row.device || row.id);
+    if (!raw) return "--";
+    const text = String(raw);
+    if (text.startsWith("anon_")) return text;
+    if (text.length <= 8) return text;
+    return `${text.slice(0, 4)}••${text.slice(-4)}`;
+  }
+
+  function detectionTransport(row) {
+    const transport = row && row.transport ? String(row.transport) : "UNKNOWN";
+    return transport.toUpperCase();
+  }
+
+  function detectionLastSeen(row) {
+    return row.last_seen || row.last_seen_iso || row.last_seen_at || row.time || row.ts_iso || row.ts_ms || row.last_seen_ms;
+  }
+
+  function detectionFirstSeen(row) {
+    return row.first_seen || row.first_seen_iso || row.first_seen_at || row.first_seen_ms;
+  }
+
+  function buildDetectionTopUrl(limit) {
+    const now = Date.now();
+    const from = now - 24 * 60 * 60 * 1000;
+    return `/api/detections/top?from_ms=${from}&to_ms=${now}&limit=${limit || 50}`;
+  }
+
   async function hydrateDashboard() {
-    const [kpis, hourlySeries, latest] = await Promise.all([
+    const [kpis, hourlySeries, latest, recentDetections] = await Promise.all([
       fetchJson("/api/kpis/now"),
       fetchJson("/api/series/hourly"),
       fetchJson("/api/observations/latest?limit=5"),
+      fetchJson("/api/detections/recent?seconds=300&limit=10"),
     ]);
 
     const obs = kpis && kpis.observation ? kpis.observation : null;
@@ -52,59 +117,156 @@
     if (kpis && kpis.hourly && Number.isFinite(kpis.hourly.avg_unique)) {
       setText("kpi-hourly-avg", `Avg: ${kpis.hourly.avg_unique.toFixed(2)}`);
     }
+    if (kpis && kpis.trend) {
+      const trend = kpis.trend;
+      if (trend.delta_pct === null || trend.delta_pct === undefined) {
+        setText("kpi-trend-delta", "N/A");
+      } else {
+        const v = Number(trend.delta_pct);
+        const arrow = v > 0 ? "↑" : v < 0 ? "↓" : "→";
+        setText("kpi-trend-delta", `${arrow} ${Math.abs(v).toFixed(1)}%`);
+      }
+      if (Number.isFinite(trend.avg_last_60m)) {
+        setText("kpi-trend-current", Number(trend.avg_last_60m).toFixed(2));
+      }
+      if (Number.isFinite(trend.avg_prev_60m)) {
+        setText("kpi-trend-prev", Number(trend.avg_prev_60m).toFixed(2));
+      }
+    }
 
-    const hourlyItems = hourlySeries && Array.isArray(hourlySeries.items) ? hourlySeries.items.slice(-8).reverse() : [];
+    const hourlyItems = asArray(hourlySeries).slice(-8).reverse();
     renderRows(
       "dashboard-hourly-body",
       hourlyItems,
-      (row) => `<tr>
+      function (row) {
+        return `<tr>
         <td class="py-2">${row.hour || "--"}</td>
         <td class="py-2 text-right">${Number.isFinite(row.peak_unique) ? row.peak_unique : "--"}</td>
         <td class="py-2 text-right">${Number.isFinite(row.avg_unique) ? row.avg_unique.toFixed(2) : "--"}</td>
-      </tr>`,
-      "No hourly points yet."
+      </tr>`;
+      },
+      "No hourly points yet.",
+      3
     );
 
-    const latestItems = latest && Array.isArray(latest.items) ? latest.items : [];
+    const latestItems = asArray(latest);
     renderRows(
       "dashboard-latest-body",
       latestItems,
-      (row) => `<tr>
+      function (row) {
+        return `<tr>
         <td class="py-2">${fmtTs(row.ts_iso || row.ts_ms)}</td>
         <td class="py-2 text-right">${Number.isFinite(row.unique_devices_count) ? row.unique_devices_count : "--"}</td>
         <td class="py-2 text-right">${Number.isFinite(row.raw_count) ? row.raw_count : "--"}</td>
-      </tr>`,
-      "No observations yet."
+      </tr>`;
+      },
+      "No observations yet.",
+      3
+    );
+
+    const detections = asArray(recentDetections);
+    renderRows(
+      "dashboard-detections-body",
+      detections.slice(0, 8),
+      function (row) {
+        return `<tr>
+        <td class="py-2">${fmtTs(detectionLastSeen(row))}</td>
+        <td class="py-2">${detectionDeviceId(row)}</td>
+        <td class="py-2">${detectionTransport(row)}</td>
+        <td class="py-2 text-right">${toNumber(row.rssi_dbm ?? row.rssi) ?? "--"}</td>
+      </tr>`;
+      },
+      "No detections yet.",
+      4
+    );
+    setText(
+      "dashboard-detections-note",
+      recentDetections ? "Last 5 minutes via /api/detections/recent" : "Detection API not available yet"
     );
   }
 
   async function hydrateTrends() {
-    const [daily, hourly] = await Promise.all([fetchJson("/api/series/daily"), fetchJson("/api/series/hourly")]);
-    const dailyItems = daily && Array.isArray(daily.items) ? daily.items : [];
-    const hourlyItems = hourly && Array.isArray(hourly.items) ? hourly.items : [];
+    const [daily, hourly, topDetections] = await Promise.all([
+      fetchJson("/api/series/daily"),
+      fetchJson("/api/series/hourly"),
+      fetchJson(buildDetectionTopUrl(20)),
+    ]);
+
+    const dailyItems = asArray(daily);
+    const hourlyItems = asArray(hourly);
 
     renderRows(
       "trends-daily-body",
       dailyItems.slice().reverse(),
-      (row) => `<tr>
+      function (row) {
+        return `<tr>
         <td class="py-2">${row.day || "--"}</td>
         <td class="py-2 text-right">${Number.isFinite(row.peak_unique) ? row.peak_unique : "--"}</td>
         <td class="py-2 text-right">${Number.isFinite(row.avg_unique) ? row.avg_unique.toFixed(2) : "--"}</td>
         <td class="py-2 text-right">${Number.isFinite(row.peak_raw) ? row.peak_raw : "--"}</td>
-      </tr>`,
-      "No daily data yet."
+      </tr>`;
+      },
+      "No daily data yet.",
+      4
     );
 
     renderRows(
       "trends-hourly-body",
       hourlyItems.slice().reverse().slice(0, 24),
-      (row) => `<tr>
+      function (row) {
+        return `<tr>
         <td class="py-2">${row.hour || "--"}</td>
         <td class="py-2 text-right">${Number.isFinite(row.peak_unique) ? row.peak_unique : "--"}</td>
         <td class="py-2 text-right">${Number.isFinite(row.avg_unique) ? row.avg_unique.toFixed(2) : "--"}</td>
         <td class="py-2 text-right">${Number.isFinite(row.peak_raw) ? row.peak_raw : "--"}</td>
-      </tr>`,
-      "No hourly data yet."
+      </tr>`;
+      },
+      "No hourly data yet.",
+      4
+    );
+
+    const topItems = asArray(topDetections);
+    renderRows(
+      "trends-top-detections-body",
+      topItems,
+      function (row) {
+        return `<tr>
+          <td class="py-2">${detectionDeviceId(row)}</td>
+          <td class="py-2">${detectionTransport(row)}</td>
+          <td class="py-2 text-right">${toNumber(row.seen_count) ?? "--"}</td>
+          <td class="py-2 text-right">${toNumber(row.rssi_dbm ?? row.rssi) ?? "--"}</td>
+        </tr>`;
+      },
+      "No top detections yet.",
+      4
+    );
+
+    const transports = topItems.reduce(function (acc, row) {
+      const key = detectionTransport(row);
+      const count = toNumber(row.seen_count) || 0;
+      acc[key] = (acc[key] || 0) + count;
+      return acc;
+    }, {});
+    const transportBody = document.getElementById("trends-transport-body");
+    if (transportBody) {
+      const entries = Object.entries(transports).sort(function (a, b) {
+        return b[1] - a[1];
+      });
+      if (!entries.length) {
+        transportBody.innerHTML = `<li class="py-2 text-text-muted">No transport mix data yet.</li>`;
+      } else {
+        transportBody.innerHTML = entries
+          .map(function (entry) {
+            return `<li class="py-2 flex items-center justify-between border-b border-surface-highlight/70"><span>${entry[0]}</span><span class="font-mono text-primary">${entry[1]}</span></li>`;
+          })
+          .join("");
+      }
+    }
+    setText(
+      "trends-top-note",
+      topDetections
+        ? "Top devices over last 24h via /api/detections/top"
+        : "Top detections API not available yet"
     );
 
     const canvas = document.getElementById("trends-chart");
@@ -121,9 +283,18 @@
       return;
     }
 
-    const labels = dailyItems.map((item) => item.day || "--");
-    const data = dailyItems.map((item) => (Number.isFinite(item.peak_unique) ? item.peak_unique : 0));
-    new window.Chart(canvas, {
+    const labels = dailyItems.map(function (item) {
+      return item.day || "--";
+    });
+    const data = dailyItems.map(function (item) {
+      return Number.isFinite(item.peak_unique) ? item.peak_unique : 0;
+    });
+
+    if (window.__rpipulseDailyChart) {
+      window.__rpipulseDailyChart.destroy();
+    }
+
+    window.__rpipulseDailyChart = new window.Chart(canvas, {
       type: "line",
       data: {
         labels,
@@ -151,58 +322,260 @@
     if (note) note.textContent = "Daily peak chart rendered from /api/series/daily.";
   }
 
-  function prependMonitorRow(obs) {
-    const body = document.getElementById("monitor-observations-body");
-    if (!body || !obs) return;
-    const row = document.createElement("tr");
-    row.className = "new-row";
-    row.innerHTML = `<td class="p-3">${fmtTs(obs.ts_iso || obs.ts_ms)}</td>
-      <td class="p-3 text-right">${Number.isFinite(obs.unique_devices_count) ? obs.unique_devices_count : "--"}</td>
-      <td class="p-3 text-right">${Number.isFinite(obs.raw_count) ? obs.raw_count : "--"}</td>`;
+  function normalizeDetectionRow(row) {
+    return {
+      time: detectionLastSeen(row),
+      anon_device_id: row.anon_device_id || row.device_id || row.device || row.id || "--",
+      transport: detectionTransport(row),
+      rssi_dbm: toNumber(row.rssi_dbm ?? row.rssi),
+      seen_count: toNumber(row.seen_count) || 0,
+      first_seen: detectionFirstSeen(row),
+      last_seen: detectionLastSeen(row),
+    };
+  }
 
-    const current = body.querySelector("tr td[colspan]");
-    if (current) body.innerHTML = "";
-    body.prepend(row);
-
-    while (body.children.length > 50) {
-      body.removeChild(body.lastElementChild);
+  function upsertDetection(items, row) {
+    const device = row.anon_device_id;
+    const transport = row.transport;
+    const key = `${device}::${transport}`;
+    const idx = items.findIndex(function (item) {
+      return `${item.anon_device_id}::${item.transport}` === key;
+    });
+    if (idx === -1) {
+      items.unshift(row);
+    } else {
+      items[idx] = row;
     }
+    items.sort(function (a, b) {
+      return new Date(b.last_seen).getTime() - new Date(a.last_seen).getTime();
+    });
+    if (items.length > 300) items.length = 300;
   }
 
   async function hydrateMonitor() {
     const streamState = document.getElementById("monitor-stream-state");
+    const deviceInput = document.getElementById("monitor-filter-device");
+    const rssiInput = document.getElementById("monitor-filter-rssi");
+    const transportInput = document.getElementById("monitor-filter-transport");
+    const refreshBtn = document.getElementById("monitor-refresh-btn");
+    const resultCount = document.getElementById("monitor-result-count");
 
-    const seed = await fetchJson("/api/observations/latest?limit=20");
-    const seedItems = seed && Array.isArray(seed.items) ? seed.items : [];
-    if (seedItems.length) {
-      const body = document.getElementById("monitor-observations-body");
-      if (body) body.innerHTML = "";
-      seedItems.forEach((item) => prependMonitorRow(item));
+    var rows = [];
+
+    function refreshTransportOptions(sourceRows) {
+      if (!transportInput) return;
+      const selected = transportInput.value || "";
+      const set = new Set([""]);
+      sourceRows.forEach(function (row) {
+        set.add(row.transport);
+      });
+      const options = Array.from(set).sort();
+      transportInput.innerHTML = options
+        .map(function (value) {
+          const selectedAttr = value === selected ? " selected" : "";
+          return `<option value="${value}"${selectedAttr}>${value || "ALL"}</option>`;
+        })
+        .join("");
     }
 
+    function applyFilters() {
+      const filterDevice = deviceInput ? deviceInput.value.trim().toLowerCase() : "";
+      const minRssi = rssiInput ? toNumber(rssiInput.value) : null;
+      const filterTransport = transportInput ? transportInput.value : "";
+
+      const filtered = rows.filter(function (row) {
+        if (filterDevice && String(row.anon_device_id).toLowerCase().indexOf(filterDevice) === -1) return false;
+        if (minRssi !== null && row.rssi_dbm !== null && row.rssi_dbm < minRssi) return false;
+        if (minRssi !== null && row.rssi_dbm === null) return false;
+        if (filterTransport && row.transport !== filterTransport) return false;
+        return true;
+      });
+
+      renderRows(
+        "monitor-detections-body",
+        filtered,
+        function (row) {
+          return `<tr>
+            <td class="p-3">${fmtTs(row.time)}</td>
+            <td class="p-3">${detectionDeviceId(row)}</td>
+            <td class="p-3">${row.transport}</td>
+            <td class="p-3 text-right">${row.rssi_dbm ?? "--"}</td>
+            <td class="p-3 text-right">${row.seen_count}</td>
+            <td class="p-3">${fmtTs(row.first_seen)}</td>
+            <td class="p-3">${fmtTs(row.last_seen)}</td>
+          </tr>`;
+        },
+        "No detections match current filters.",
+        7
+      );
+
+      if (resultCount) resultCount.textContent = `${filtered.length} / ${rows.length}`;
+    }
+
+    async function loadRecent() {
+      const payload = await fetchJson("/api/detections/recent?seconds=300&limit=200");
+      if (!payload) {
+        if (streamState && !rows.length) streamState.textContent = "Waiting for detection API...";
+        applyFilters();
+        return;
+      }
+      rows = asArray(payload).map(normalizeDetectionRow);
+      refreshTransportOptions(rows);
+      applyFilters();
+      if (streamState) streamState.textContent = "Connected";
+    }
+
+    [deviceInput, rssiInput, transportInput].forEach(function (el) {
+      if (!el) return;
+      el.addEventListener("input", applyFilters);
+      el.addEventListener("change", applyFilters);
+    });
+
+    if (refreshBtn) refreshBtn.addEventListener("click", loadRecent);
+
+    await loadRecent();
+
     if (typeof window.EventSource !== "function") {
-      if (streamState) streamState.textContent = "EventSource unavailable";
       return;
     }
 
     try {
-      const source = new window.EventSource("/api/stream/observations");
+      const source = new window.EventSource("/api/stream/detections");
       source.addEventListener("open", function () {
-        if (streamState) streamState.textContent = "Connected";
+        if (streamState) streamState.textContent = "Streaming";
       });
-      source.addEventListener("observation", function (event) {
+
+      function handleSse(event) {
         try {
-          prependMonitorRow(JSON.parse(event.data));
+          const parsed = JSON.parse(event.data);
+          const list = Array.isArray(parsed) ? parsed : [parsed.item || parsed];
+          list.forEach(function (item) {
+            if (!item || typeof item !== "object") return;
+            upsertDetection(rows, normalizeDetectionRow(item));
+          });
+          refreshTransportOptions(rows);
+          applyFilters();
         } catch (_err) {
-          // Keep running with last known state.
+          // Ignore malformed payloads and keep stream alive.
         }
-      });
+      }
+
+      source.addEventListener("detection", handleSse);
+      source.addEventListener("message", handleSse);
       source.addEventListener("error", function () {
-        if (streamState) streamState.textContent = "Disconnected";
+        if (streamState) streamState.textContent = "Connected (polling)";
       });
     } catch (_err) {
-      if (streamState) streamState.textContent = "SSE unavailable";
+      // Optional SSE endpoint: fallback is periodic refresh.
     }
+
+    window.setInterval(loadRecent, 15000);
+  }
+
+  function ensureToastContainer() {
+    let node = document.getElementById("toast-container");
+    if (node) return node;
+    node = document.createElement("div");
+    node.id = "toast-container";
+    node.className = "fixed bottom-4 right-4 z-[70] flex flex-col gap-2";
+    document.body.appendChild(node);
+    return node;
+  }
+
+  function showToast(message, kind) {
+    const container = ensureToastContainer();
+    const toast = document.createElement("div");
+    const palette = kind === "error" ? "border-accent-red text-accent-red" : "border-status-green text-status-green";
+    toast.className = `rounded-md border bg-surface px-4 py-3 text-sm font-mono shadow-xl ${palette}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    window.setTimeout(function () {
+      toast.remove();
+    }, 2600);
+  }
+
+  async function hydrateSensors() {
+    const form = document.getElementById("sensors-config-form");
+    if (!form) return;
+
+    const saveBtn = document.getElementById("sensors-save-btn");
+    const reloadBtn = document.getElementById("sensors-reload-btn");
+    const statusNode = document.getElementById("sensors-status");
+    const loadedNode = document.getElementById("sensors-last-loaded");
+
+    const fields = {
+      scan_interval_s: document.getElementById("scan_interval_s"),
+      scan_duration_s: document.getElementById("scan_duration_s"),
+      rssi_min_dbm: document.getElementById("rssi_min_dbm"),
+      retention_days: document.getElementById("retention_days"),
+    };
+
+    function setStatus(text, isError) {
+      if (!statusNode) return;
+      statusNode.textContent = text;
+      statusNode.classList.toggle("text-accent-red", Boolean(isError));
+      statusNode.classList.toggle("text-text-muted", !isError);
+    }
+
+    function collectPayload() {
+      return {
+        scan_interval_s: toNumber(fields.scan_interval_s && fields.scan_interval_s.value),
+        scan_duration_s: toNumber(fields.scan_duration_s && fields.scan_duration_s.value),
+        rssi_min_dbm: toNumber(fields.rssi_min_dbm && fields.rssi_min_dbm.value),
+        retention_days: toNumber(fields.retention_days && fields.retention_days.value),
+      };
+    }
+
+    function applyPayload(payload) {
+      Object.keys(fields).forEach(function (key) {
+        const input = fields[key];
+        if (!input) return;
+        const value = payload && payload[key] !== undefined && payload[key] !== null ? payload[key] : "";
+        input.value = String(value);
+      });
+    }
+
+    async function loadConfig() {
+      setStatus("Loading config from /api/config ...", false);
+      const payload = await fetchJson("/api/config");
+      if (!payload) {
+        setStatus("/api/config not available yet.", true);
+        return;
+      }
+      applyPayload(payload);
+      if (loadedNode) loadedNode.textContent = fmtTs(new Date().toISOString());
+      setStatus("Config loaded.", false);
+    }
+
+    form.addEventListener("submit", async function (event) {
+      event.preventDefault();
+      const payload = collectPayload();
+      if (saveBtn) saveBtn.setAttribute("disabled", "disabled");
+      setStatus("Saving config ...", false);
+      const response = await putJson("/api/config", payload);
+      if (saveBtn) saveBtn.removeAttribute("disabled");
+
+      if (!response.ok) {
+        setStatus(`Could not save config (status ${response.status || "n/a"}).`, true);
+        showToast("Error guardando configuración", "error");
+        return;
+      }
+
+      if (response.data && typeof response.data === "object") {
+        applyPayload(response.data);
+      }
+      setStatus("Config saved.", false);
+      if (loadedNode) loadedNode.textContent = fmtTs(new Date().toISOString());
+      showToast("Configuración guardada", "success");
+    });
+
+    if (reloadBtn) {
+      reloadBtn.addEventListener("click", function () {
+        loadConfig();
+      });
+    }
+
+    await loadConfig();
   }
 
   function init() {
@@ -212,6 +585,7 @@
     if (page === "dashboard") hydrateDashboard();
     if (page === "trends") hydrateTrends();
     if (page === "monitor") hydrateMonitor();
+    if (page === "sensors") hydrateSensors();
   }
 
   if (document.readyState === "loading") {

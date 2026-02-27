@@ -34,18 +34,46 @@
         <span id="monitor-stream-state" class="text-primary">Connecting...</span>
       </div>
     </header>
+
+    <section class="border-b border-surface-highlight bg-surface/30 px-6 py-4">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <label class="block">
+          <span class="block text-[11px] font-bold text-text-muted uppercase tracking-wider mb-1">Device ID</span>
+          <input id="monitor-filter-device" type="text" placeholder="anon_..." class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono text-sm" />
+        </label>
+        <label class="block">
+          <span class="block text-[11px] font-bold text-text-muted uppercase tracking-wider mb-1">RSSI Min (dBm)</span>
+          <input id="monitor-filter-rssi" type="number" placeholder="-90" class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono text-sm" />
+        </label>
+        <label class="block">
+          <span class="block text-[11px] font-bold text-text-muted uppercase tracking-wider mb-1">Transport</span>
+          <select id="monitor-filter-transport" class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono text-sm">
+            <option value="">ALL</option>
+          </select>
+        </label>
+        <div class="flex items-end gap-3">
+          <button id="monitor-refresh-btn" type="button" class="h-10 px-4 bg-primary text-black font-semibold rounded hover:bg-yellow-500 transition-colors">Refresh</button>
+          <div class="text-xs font-mono text-text-muted">rows: <span id="monitor-result-count" class="text-primary">0 / 0</span></div>
+        </div>
+      </div>
+    </section>
+
     <div class="flex-1 overflow-auto p-6">
       <div class="rounded-lg border border-surface-highlight bg-surface shadow-xl overflow-hidden">
         <table class="w-full text-sm font-mono">
           <thead class="bg-background-dark text-xs uppercase text-text-muted">
             <tr>
-              <th class="text-left p-3">Timestamp</th>
-              <th class="text-right p-3">Unique Devices</th>
-              <th class="text-right p-3">Raw Count</th>
+              <th class="text-left p-3">Time</th>
+              <th class="text-left p-3">Anon Device ID</th>
+              <th class="text-left p-3">Transport</th>
+              <th class="text-right p-3">RSSI dBm</th>
+              <th class="text-right p-3">Seen Count</th>
+              <th class="text-left p-3">First Seen</th>
+              <th class="text-left p-3">Last Seen</th>
             </tr>
           </thead>
-          <tbody id="monitor-observations-body" class="divide-y divide-surface-highlight/80">
-            <tr><td class="p-3" colspan="3">Waiting for observation stream...</td></tr>
+          <tbody id="monitor-detections-body" class="divide-y divide-surface-highlight/80">
+            <tr><td class="p-3" colspan="7">Waiting for detection stream...</td></tr>
           </tbody>
         </table>
       </div>
