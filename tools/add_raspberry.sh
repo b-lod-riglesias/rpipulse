@@ -20,6 +20,26 @@ RPI_NAME=""
 SSH_KEY_FILE="/etc/rpipulse/ssh/id_ed25519"
 USE_KEY_AUTH=true
 
+# SSH ControlMaster for single connection (avoid antibot/blocking)
+# Uses a single persistent SSH connection for all operations
+SSH_CONTROL_DIR="/tmp/rpipulse-ssh-$$"
+SSH_CONTROL_SOCKET="${SSH_CONTROL_DIR}/socket"
+SSH_OPTS_BASE="-p ${SSH_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${SSH_KEY_FILE} -o ControlMaster=auto -o ControlPath=${SSH_CONTROL_SOCKET} -o ControlPersist=300"
+
+# Cleanup function for SSH control socket
+cleanup_ssh() {
+  if [[ -n "$SSH_CONTROL_SOCKET" ]] && [[ -S "$SSH_CONTROL_SOCKET" ]]; then
+    ssh -S "$SSH_CONTROL_SOCKET" -O exit 2>/dev/null || true
+  fi
+  rm -rf "$SSH_CONTROL_DIR" 2>/dev/null || true
+}
+trap cleanup_ssh EXIT
+
+# Helper function to run SSH commands using the persistent connection
+ssh_exec() {
+  ssh $SSH_OPTS_BASE "$@"
+}
+
 # Parse args
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -51,10 +71,14 @@ while [[ $# -gt 0 ]]; do
       echo "El script despliega a:"
       echo "  - /opt/rpipulse/releases/<version>/"
       echo "  - /opt/rpipulse/current -> symlink"
-      echo "  - /etc/rpipulse/config.yaml"
+      echo "  - /etc/rpipulse/rpipulse.env (con RPIPULSE_DB_PATH)"
       echo "  - /var/lib/rpipulse/"
       echo "  - Usuario 'rpipulse' con grupo bluetooth"
       echo "  - Servicios: rpipulse-scan.timer, rpipulse-ui.service"
+      echo ""
+      echo "Notas:"
+      echo "  - Usa SSH ControlMaster para evitar bloqueos por conexiones repetidas"
+      echo "  - Los servicios usan variables de entorno (no --config flag)"
       exit 0
       ;;
     *)
@@ -78,15 +102,20 @@ if [[ -z "$RPI_NAME" ]]; then
   exit 1
 fi
 
-SSH_OPTS="-p ${SSH_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${SSH_KEY_FILE}"
-
 echo "=========================================="
 echo "  Despliegue RPIpulse -> $RPI_NAME ($RPI_HOST)"
 echo "=========================================="
 
+# Initialize SSH control connection first
+echo "[*] Estableciendo conexión SSH persistente..."
+ssh_exec -o ConnectTimeout=10 ${SSH_USER}@${RPI_HOST} "echo 'SSH connection ready'" || {
+  echo "ERROR: No se pudo establecer conexión SSH"
+  exit 1
+}
+
 # 1. Crear usuario rpipulse y grupo bluetooth
 echo "[1/8] Creando usuario rpipulse y grupo bluetooth..."
-ssh $SSH_OPTS ${SSH_USER}@${RPI_HOST} "
+ssh_exec ${SSH_USER}@${RPI_HOST} "
   sudo useradd -r -s /bin/bash -m -d /var/lib/rpipulse rpipulse 2>/dev/null || true
   sudo usermod -aG bluetooth rpipulse 2>/dev/null || true
   echo '  Usuario rpipulse creado/configurado'
@@ -96,7 +125,7 @@ ssh $SSH_OPTS ${SSH_USER}@${RPI_HOST} "
 echo "[1.5/8] Configurando SSH key para acceso sin password..."
 if [[ "$USE_KEY_AUTH" == "true" ]] && [[ -f "$SSH_KEY_FILE" ]]; then
   PUB_KEY=$(cat ${SSH_KEY_FILE}.pub)
-  ssh $SSH_OPTS ${SSH_USER}@${RPI_HOST} "
+  ssh_exec ${SSH_USER}@${RPI_HOST} "
     sudo mkdir -p /var/lib/rpipulse/.ssh
     sudo chmod 700 /var/lib/rpipulse/.ssh
     echo '$PUB_KEY' | sudo tee /var/lib/rpipulse/.ssh/authorized_keys > /dev/null
@@ -108,41 +137,45 @@ else
   echo "  SKIP: SSH key auth deshabilitado o archivo no encontrado"
 fi
 
-# 2. Crear directorios necesarios
-echo "[2/8] Creando directorios..."
-ssh $SSH_OPTS ${SSH_USER}@${RPI_HOST} "
+# 2. Crear directorios necesarios y archivo de entorno
+echo "[2/8] Creando directorios y archivo de entorno..."
+ssh_exec ${SSH_USER}@${RPI_HOST} "
   sudo mkdir -p /opt/rpipulse/releases
   sudo mkdir -p /etc/rpipulse
-  sudo mkdir -p /var/lib/rpipulse
+  sudo mkdir -p /var/lib/rpipulse/data
   sudo chown rpipulse:rpipulse /var/lib/rpipulse
-  echo '  Directorios creados'
+  
+  # Create environment file with DB path
+  echo 'RPIPULSE_DB_PATH=/var/lib/rpipulse/data/rpipulse.sqlite' | sudo tee /etc/rpipulse/rpipulse.env > /dev/null
+  sudo chmod 644 /etc/rpipulse/rpipulse.env
+  
+  echo '  Directorios y rpipulse.env creados'
 "
 
 # 3. Configurar release
 echo "[3/8] Configurando release..."
-ssh $SSH_OPTS ${SSH_USER}@${RPI_HOST} "
-  RELEASE_DIR=$(ls -td /opt/rpipulse/releases/*/ 2>/dev/null | head -1)
-  if [ -z "$RELEASE_DIR" ]; then
+ssh_exec ${SSH_USER}@${RPI_HOST} "
+  RELEASE_DIR=\$(ls -td /opt/rpipulse/releases/*/ 2>/dev/null | head -1)
+  if [ -z "\$RELEASE_DIR" ]; then
     echo 'ERROR: No hay releases en /opt/rpipulse/releases/'
     exit 1
   fi
-  sudo ln -sfn $RELEASE_DIR /opt/rpipulse/current
+  sudo ln -sfn \$RELEASE_DIR /opt/rpipulse/current
   if [ ! -f /opt/rpipulse/current/bin/rpipulse ]; then
     echo 'ERROR: /opt/rpipulse/current/bin/rpipulse no existe'
     exit 1
   fi
-  echo '  Release configurado: '$RELEASE_DIR
+  echo '  Release configurado: '\$RELEASE_DIR
 "
 
-# 4. Instalar units systemd
+# 4. Instalar units systemd (corregidas - sin --config, usan env vars)
 echo "[4/8] Instalando units systemd..."
-ssh $SSH_OPTS ${SSH_USER}@${RPI_HOST} "
+ssh_exec ${SSH_USER}@${RPI_HOST} "
   sudo tee /etc/systemd/system/rpipulse-scan.service > /dev/null << 'UNITEOF'
 [Unit]
 Description=RpiPulse BLE scan (single run)
 Wants=bluetooth.service
 After=bluetooth.service dbus.service
-ConditionPathExists=/etc/rpipulse/config.yaml
 
 [Service]
 Type=oneshot
@@ -151,9 +184,9 @@ Group=rpipulse
 SupplementaryGroups=bluetooth
 StateDirectory=rpipulse
 WorkingDirectory=/var/lib/rpipulse
-EnvironmentFile=-/etc/rpipulse/rpipulse.env
+EnvironmentFile=/etc/rpipulse/rpipulse.env
 
-ExecStart=/opt/rpipulse/current/bin/rpipulse scan --config /etc/rpipulse/config.yaml
+ExecStart=/opt/rpipulse/current/bin/rpipulse scan --windows 1
 
 SuccessExitStatus=0 2
 NoNewPrivileges=true
@@ -193,9 +226,9 @@ User=rpipulse
 Group=rpipulse
 StateDirectory=rpipulse
 WorkingDirectory=/var/lib/rpipulse
-EnvironmentFile=-/etc/rpipulse/rpipulse.env
+EnvironmentFile=/etc/rpipulse/rpipulse.env
 
-ExecStart=/opt/rpipulse/current/bin/rpipulse ui --config /etc/rpipulse/config.yaml --bind 0.0.0.0 --port 8000
+ExecStart=/opt/rpipulse/current/bin/rpipulse ui --host 0.0.0.0 --port 8000
 
 Restart=on-failure
 RestartSec=2s
@@ -215,7 +248,7 @@ UIEOF
 
 # 5. Habilitar servicios
 echo "[5/8] Habilitando servicios..."
-ssh $SSH_OPTS ${SSH_USER}@${RPI_HOST} "
+ssh_exec ${SSH_USER}@${RPI_HOST} "
   sudo systemctl enable --now rpipulse-scan.timer
   sudo systemctl enable --now rpipulse-ui.service
   echo '  Servicios habilitados'
@@ -223,7 +256,7 @@ ssh $SSH_OPTS ${SSH_USER}@${RPI_HOST} "
 
 # 6. Verificar estado
 echo "[6/8] Verificando servicios..."
-ssh $SSH_OPTS ${SSH_USER}@${RPI_HOST} "
+ssh_exec ${SSH_USER}@${RPI_HOST} "
   systemctl status rpipulse-scan.timer --no-pager || true
   systemctl status rpipulse-ui.service --no-pager || true
 "
@@ -236,7 +269,7 @@ echo "  RPIpulse desplegado en $RPI_NAME"
 echo "=========================================="
 echo ""
 echo "  URL del dashboard:"
-echo "  -> http://${RPI_HOST}:8000/dashboard"
+echo "  -> http://${RPI_HOST}:8000"
 echo ""
 echo "  Comandos en la Pi:"
 echo "  - Logs UI:     journalctl -u rpipulse-ui.service -n 50 --no-pager"
@@ -247,7 +280,7 @@ echo ""
 
 # 8. Verificar acceso SSH del usuario rpipulse
 echo "[8/8] Verificando acceso SSH del usuario rpipulse..."
-if ssh $SSH_OPTS rpipulse@${RPI_HOST} "echo OK && whoami && echo \$SHELL" 2>/dev/null; then
+if ssh_exec rpipulse@${RPI_HOST} "echo OK && whoami && echo \$SHELL" 2>/dev/null; then
   echo "  ✓ Acceso SSH verificado para usuario rpipulse"
 else
   echo "  ⚠ Advertencia: No se pudo verificar acceso SSH de rpipulse"
