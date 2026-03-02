@@ -10,6 +10,7 @@ Este documento describe cómo configurar el acceso SSH seguro desde el hub RPIpu
 4. [Variables de Entorno](#variables-de-entorno)
 5. [Uso del Script de Despliegue](#uso-del-script-de-despliegue)
 6. [Agregar una Nueva Raspberry](#agregar-una-nueva-raspberry)
+7. [Solución de Problemas de Bluetooth](#solución-de-problemas-de-bluetooth)
 
 ---
 
@@ -193,6 +194,64 @@ ssh -i /etc/rpipulse/ssh/id_ed25519 rpipulse@<IP_RASPBERRY>
 ```
 
 El script de despliegue (`add_raspberry.sh`) incluye una verificación automática post-setup que prueba el acceso SSH.
+
+
+## Solución de Problemas de Bluetooth
+
+### "Active Devices = 0" o Bluetooth apagado
+
+Si el dashboard muestra "Active Devices = 0" y en la Raspberry:
+
+```bash
+bluetoothctl show
+# Output esperado: Powered: yes
+
+# O si está apagado:
+# Powered: no
+# PowerState: off-blocked
+# hci0 DOWN
+```
+
+Ejecuta este bloque de comandos **UNA SOLA VEZ** en la Raspberry (como root o con sudo):
+
+```bash
+# 1. Instalar rfkill si no existe
+sudo apt-get update -qq && sudo apt-get install -y rfkill
+
+# 2. Habilitar bluetooth automático en main.conf
+if ! grep -q '^AutoEnable=true' /etc/bluetooth/main.conf; then
+    echo 'AutoEnable=true' | sudo tee -a /etc/bluetooth/main.conf
+    sudo systemctl restart bluetooth.service
+fi
+
+# 3. Desbloquear y encender bluetooth
+sudo rfkill unblock bluetooth
+sudo bluetoothctl power on
+sudo hciconfig hci0 up
+
+# 4. Verificar estado
+bluetoothctl show
+```
+
+**Para автоматиizar esto en cada reinicio**, el script `add_raspberry.sh` ya instala el servicio `rpipulse-bt-ensure.service`:
+
+```bash
+# Verificar que el servicio está activo
+systemctl status rpipulse-bt-ensure.service
+
+# Si no está instalado (Pi antiguas), instalarlo manualmente:
+sudo systemctl enable --now rpipulse-bt-ensure.service
+```
+
+### Verificar que el scan funciona
+
+```bash
+# Forzar un scan manual
+sudo -u rpipulse rpipulse scan --windows 1
+
+# Ver logs
+journalctl -u rpipulse-scan.service -n 20 --no-pager
+```
 
 
 ## Solución de Problemas

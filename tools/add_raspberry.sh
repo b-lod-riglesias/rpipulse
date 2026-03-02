@@ -169,13 +169,55 @@ ssh_exec ${SSH_USER}@${RPI_HOST} "
 "
 
 # 4. Instalar units systemd (corregidas - sin --config, usan env vars)
-echo "[4/8] Instalando units systemd..."
+#    Y crear servicio de ensure bluetooth
+echo "[4/8] Instalando units systemd y servicio Bluetooth ensure..."
 ssh_exec ${SSH_USER}@${RPI_HOST} "
+  # Instalar rfkill si no existe
+  if ! command -v rfkill &>/dev/null; then
+    sudo apt-get update -qq && sudo apt-get install -y rfkill 2>/dev/null || true
+  fi
+
+  # Configurar AutoEnable=true en bluetooth main.conf
+  if [ -f /etc/bluetooth/main.conf ]; then
+    if ! grep -q '^AutoEnable=true' /etc/bluetooth/main.conf; then
+      echo 'AutoEnable=true' | sudo tee -a /etc/bluetooth/main.conf > /dev/null
+      sudo systemctl restart bluetooth.service 2>/dev/null || true
+    fi
+  fi
+
+  # Crear servicio oneshot para asegurar bluetooth activo al boot
+  sudo tee /etc/systemd/system/rpipulse-bt-ensure.service > /dev/null << 'BTENSUREEOF'
+[Unit]
+Description=RpiPulse Bluetooth Ensure (power on)
+DefaultDependencies=no
+After=bluetooth.service
+Before=rpipulse-scan.service
+Wants=bluetooth.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'rfkill unblock bluetooth || true; bluetoothctl power on || true; hciconfig hci0 up 2>/dev/null || true'
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+BTENSUREEOF
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now rpipulse-bt-ensure.service 2>/dev/null || true
+  echo '  Bluetooth ensure service instalado'
+"
+
+echo "[4.5/8] Actualizando rpipulse-scan.service con dependencia Bluetooth..."
+ssh_exec ${SSH_USER}@${RPI_HOST} "
+  # Actualizar rpipulse-scan.service para depender de bt-ensure
   sudo tee /etc/systemd/system/rpipulse-scan.service > /dev/null << 'UNITEOF'
 [Unit]
 Description=RpiPulse BLE scan (single run)
-Wants=bluetooth.service
-After=bluetooth.service dbus.service
+Wants=rpipulse-bt-ensure.service
+After=rpipulse-bt-ensure.service bluetooth.service dbus.service
 
 [Service]
 Type=oneshot
