@@ -36,6 +36,15 @@
     }
   }
 
+  function getAdminToken() {
+    try {
+      return sessionStorage.getItem("rpipulse_admin_token") || "";
+    } catch (_err) {
+      return "";
+    }
+  }
+
+
   function asArray(payload) {
     if (Array.isArray(payload)) return payload;
     if (!payload || typeof payload !== "object") return [];
@@ -199,8 +208,43 @@
     });
   }
 
-  function sensorConfigUrl(nodeId) {
+  function sensorConfigGetUrl(nodeId) {
     return nodeApiUrl(nodeId, "/config", "/api/config");
+  }
+
+  function sensorConfigPutUrl(nodeId) {
+    const base = sensorConfigGetUrl(nodeId);
+    // Only the HUB proxy PUT requires token. The node-local /api/config does not.
+    if (!base.startsWith("/api/nodes/")) return base;
+    const token = getAdminToken();
+    if (!token) return base;
+    return `${base}?token=${encodeURIComponent(token)}`;
+  }
+
+  function normalizeConfigForSensorsForm(config) {
+    if (!config || typeof config !== "object") return null;
+    // Support both naming styles.
+    const interval = config.scan_interval_s ?? config.interval;
+    const duration = config.scan_duration_s ?? config.duration;
+    const rssi = config.rssi_min_dbm ?? config.rssi_threshold;
+    const retention = config.retention_days;
+    return {
+      scan_interval_s: interval,
+      scan_duration_s: duration,
+      rssi_min_dbm: rssi,
+      retention_days: retention,
+    };
+  }
+
+  function normalizeSensorsPayloadForApi(payload) {
+    if (!payload || typeof payload !== "object") return payload;
+    // Convert UI field names -> API field names used by backend.
+    return {
+      interval: payload.scan_interval_s,
+      duration: payload.scan_duration_s,
+      rssi_threshold: payload.rssi_min_dbm,
+      retention_days: payload.retention_days,
+    };
   }
 
   function unwrapConfigPayload(payload) {
@@ -639,7 +683,8 @@
     const reloadBtn = document.getElementById("sensors-reload-btn");
     const statusNode = document.getElementById("sensors-status");
     const loadedNode = document.getElementById("sensors-last-loaded");
-    const configUrl = sensorConfigUrl(nodeId);
+    const configGetUrl = sensorConfigGetUrl(nodeId);
+    const configPutUrl = sensorConfigPutUrl(nodeId);
 
     const fields = {
       scan_interval_s: document.getElementById("scan_interval_s"),
@@ -674,14 +719,15 @@
     }
 
     async function loadConfig() {
-      setStatus(`Loading config from ${configUrl} ...`, false);
-      const payload = await fetchJson(configUrl);
+      setStatus(`Loading config from ${configGetUrl} ...`, false);
+      const payload = await fetchJson(configGetUrl);
       const config = unwrapConfigPayload(payload);
+      const formConfig = normalizeConfigForSensorsForm(config);
       if (!config) {
-        setStatus(`${configUrl} not available yet.`, true);
+        setStatus(`${configGetUrl} not available yet.`, true);
         return;
       }
-      applyPayload(config);
+      applyPayload(formConfig || {});
       if (loadedNode) loadedNode.textContent = fmtTs(new Date().toISOString());
       setStatus("Config loaded.", false);
     }
@@ -691,7 +737,8 @@
       const payload = collectPayload();
       if (saveBtn) saveBtn.setAttribute("disabled", "disabled");
       setStatus("Saving config ...", false);
-      const response = await putJson(configUrl, payload);
+      const apiPayload = normalizeSensorsPayloadForApi(payload);
+      const response = await putJson(configPutUrl, apiPayload);
       if (saveBtn) saveBtn.removeAttribute("disabled");
 
       if (!response.ok) {
@@ -701,8 +748,9 @@
       }
 
       const updatedConfig = unwrapConfigPayload(response.data);
-      if (updatedConfig && typeof updatedConfig === "object") {
-        applyPayload(updatedConfig);
+      const updatedFormConfig = normalizeConfigForSensorsForm(updatedConfig);
+      if (updatedFormConfig && typeof updatedFormConfig === "object") {
+        applyPayload(updatedFormConfig);
       }
       setStatus("Config saved.", false);
       if (loadedNode) loadedNode.textContent = fmtTs(new Date().toISOString());
