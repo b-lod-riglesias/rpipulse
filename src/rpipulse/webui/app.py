@@ -58,6 +58,84 @@ def _with_iso(row: dict[str, Any] | None) -> dict[str, Any] | None:
     return {**row, "ts_iso": _to_iso(ts_ms)}
 
 
+def _status_from_load_pct(load_pct: float | None) -> str:
+    if load_pct is None:
+        return "unknown"
+    if load_pct < 25:
+        return "quiet"
+    if load_pct < 60:
+        return "moderate"
+    if load_pct < 85:
+        return "busy"
+    return "packed"
+
+
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _extract_items(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, dict):
+        for key in ("items", "series", "detections"):
+            items = payload.get(key)
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+        return []
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    return []
+
+
+def _parse_nodes_csv(nodes_csv: str | None) -> list[str]:
+    if not nodes_csv:
+        return []
+    seen: set[str] = set()
+    output: list[str] = []
+    for raw_node_id in nodes_csv.split(","):
+        node_id = raw_node_id.strip()
+        if not node_id or node_id in seen:
+            continue
+        seen.add(node_id)
+        output.append(node_id)
+    return output
+
+
+def _resolve_aggregate_nodes(nodes_csv: str | None, db_path: Path) -> list[dict[str, Any]]:
+    from rpipulse.db import get_all_nodes, get_node
+
+    requested = _parse_nodes_csv(nodes_csv)
+    all_nodes = get_all_nodes(db_path=db_path)
+    enabled_nodes = [node for node in all_nodes if node.get("enabled", False)]
+    enabled_by_id = {str(node["id"]): node for node in enabled_nodes}
+
+    if not requested:
+        return enabled_nodes
+
+    resolved: list[dict[str, Any]] = []
+    for node_id in requested:
+        node = enabled_by_id.get(node_id)
+        if node is not None:
+            resolved.append(node)
+            continue
+
+        existing = get_node(node_id=node_id, db_path=db_path)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"Node '{node_id}' not found")
+        raise HTTPException(status_code=403, detail=f"Node '{node_id}' is disabled")
+
+    return resolved
+
+
 def _kpis_now(db_path: Path) -> dict[str, Any]:
     init_db(db_path)
     latest = latest_observation(db_path=db_path)
@@ -77,16 +155,7 @@ def _kpis_now(db_path: Path) -> dict[str, Any]:
         }
 
     load_pct = round((latest["unique_devices_count"] / capacity) * 100, 1) if capacity else None
-    if load_pct is None:
-        status = "unknown"
-    elif load_pct < 25:
-        status = "quiet"
-    elif load_pct < 60:
-        status = "moderate"
-    elif load_pct < 85:
-        status = "busy"
-    else:
-        status = "packed"
+    status = _status_from_load_pct(load_pct)
 
     now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
     from_24h = now_ms - DAY_MS
@@ -346,6 +415,247 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     @app.get("/api/kpis/now")
     def api_kpis_now() -> dict[str, Any]:
         return _kpis_now(app.state.db_path)
+
+    @app.get("/api/aggregate/kpis/now")
+    def api_aggregate_kpis_now(nodes: str | None = Query(default=None)) -> dict[str, Any]:
+        target_nodes = _resolve_aggregate_nodes(nodes_csv=nodes, db_path=app.state.db_path)
+
+        sum_unique = 0
+        sum_raw = 0
+        sum_capacity = 0
+        latest_ts_ms: int | None = None
+        node_statuses: set[str] = set()
+        breakdown: list[dict[str, Any]] = []
+
+        for node in target_nodes:
+            payload = _fetch_node_json(node=node, remote_path="/api/kpis/now")
+            if not isinstance(payload, dict):
+                payload = {}
+
+            node_observation = payload.get("observation")
+            if not isinstance(node_observation, dict):
+                node_observation = None
+
+            unique_count = _as_int(node_observation.get("unique_devices_count") if node_observation else 0)
+            raw_count = _as_int(node_observation.get("raw_count") if node_observation else 0)
+            capacity = max(0, _as_int(payload.get("capacity"), default=0))
+
+            sum_unique += unique_count
+            sum_raw += raw_count
+            sum_capacity += capacity
+
+            node_status = str(payload.get("status") or "unknown")
+            if node_status:
+                node_statuses.add(node_status)
+
+            node_ts_ms = _as_int(node_observation.get("ts_ms") if node_observation else None, default=0)
+            if node_ts_ms > 0:
+                latest_ts_ms = node_ts_ms if latest_ts_ms is None else max(latest_ts_ms, node_ts_ms)
+
+            node_load_pct = round((raw_count / capacity) * 100, 1) if capacity > 0 else None
+            breakdown.append(
+                {
+                    "node_id": str(node["id"]),
+                    "name": node.get("name"),
+                    "capacity": capacity,
+                    "status": node_status,
+                    "observation": {
+                        "ts_ms": node_ts_ms or None,
+                        "ts_iso": _to_iso(node_ts_ms) if node_ts_ms > 0 else None,
+                        "unique_devices_count": unique_count,
+                        "raw_count": raw_count,
+                        "load_pct": node_load_pct,
+                    },
+                }
+            )
+
+        load_pct = round((sum_raw / sum_capacity) * 100, 1) if sum_capacity > 0 else None
+        derived_status = _status_from_load_pct(load_pct)
+        status = "mixed" if len(node_statuses) > 1 else derived_status
+
+        observation = {
+            "ts_ms": latest_ts_ms,
+            "ts_iso": _to_iso(latest_ts_ms),
+            "unique_devices_count": sum_unique,
+            "raw_count": sum_raw,
+            "load_pct": load_pct,
+        }
+
+        return {
+            "observation": observation,
+            "latest": observation,
+            "capacity": sum_capacity,
+            "status": status,
+            "node_count": len(target_nodes),
+            "unique": {"mode": "sum", "value": sum_unique},
+            "breakdown": breakdown,
+        }
+
+    @app.get("/api/aggregate/series/hourly")
+    def api_aggregate_series_hourly(nodes: str | None = Query(default=None)) -> dict[str, Any]:
+        target_nodes = _resolve_aggregate_nodes(nodes_csv=nodes, db_path=app.state.db_path)
+        merged: dict[str, dict[str, Any]] = {}
+
+        for node in target_nodes:
+            payload = _fetch_node_json(node=node, remote_path="/api/series/hourly")
+            for item in _extract_items(payload):
+                key = str(item.get("hour") or "")
+                if not key:
+                    continue
+                current = merged.get(key)
+                if current is None:
+                    current = {
+                        "hour": key,
+                        "hour_start_ms": _as_int(item.get("hour_start_ms"), default=0),
+                        "peak_unique": 0,
+                        "avg_unique": 0.0,
+                        "peak_raw": 0,
+                        "avg_raw": 0.0,
+                    }
+                    merged[key] = current
+                current["peak_unique"] += _as_int(item.get("peak_unique"), default=0)
+                current["avg_unique"] += _as_float(item.get("avg_unique"), default=0.0)
+                current["peak_raw"] += _as_int(item.get("peak_raw"), default=0)
+                current["avg_raw"] += _as_float(item.get("avg_raw"), default=0.0)
+
+        items = sorted(merged.values(), key=lambda row: _as_int(row.get("hour_start_ms"), default=0))
+        return {"items": items, "series": items}
+
+    @app.get("/api/aggregate/series/daily")
+    def api_aggregate_series_daily(nodes: str | None = Query(default=None)) -> dict[str, Any]:
+        target_nodes = _resolve_aggregate_nodes(nodes_csv=nodes, db_path=app.state.db_path)
+        merged: dict[str, dict[str, Any]] = {}
+
+        for node in target_nodes:
+            payload = _fetch_node_json(node=node, remote_path="/api/series/daily")
+            for item in _extract_items(payload):
+                key = str(item.get("day") or "")
+                if not key:
+                    continue
+                current = merged.get(key)
+                if current is None:
+                    current = {
+                        "day": key,
+                        "day_start_ms": _as_int(item.get("day_start_ms"), default=0),
+                        "peak_unique": 0,
+                        "avg_unique": 0.0,
+                        "peak_raw": 0,
+                        "avg_raw": 0.0,
+                    }
+                    merged[key] = current
+                current["peak_unique"] += _as_int(item.get("peak_unique"), default=0)
+                current["avg_unique"] += _as_float(item.get("avg_unique"), default=0.0)
+                current["peak_raw"] += _as_int(item.get("peak_raw"), default=0)
+                current["avg_raw"] += _as_float(item.get("avg_raw"), default=0.0)
+
+        items = sorted(merged.values(), key=lambda row: _as_int(row.get("day_start_ms"), default=0))
+        return {"items": items, "series": items}
+
+    @app.get("/api/aggregate/detections/recent")
+    def api_aggregate_detections_recent(
+        nodes: str | None = Query(default=None),
+        seconds: int = Query(default=300, ge=1, le=86_400),
+        limit: int = Query(default=200, ge=1, le=1_000),
+    ) -> dict[str, Any]:
+        target_nodes = _resolve_aggregate_nodes(nodes_csv=nodes, db_path=app.state.db_path)
+        merged_items: list[dict[str, Any]] = []
+
+        for node in target_nodes:
+            payload = _fetch_node_json(
+                node=node,
+                remote_path="/api/detections/recent",
+                query_params={"seconds": seconds, "limit": limit},
+            )
+            for item in _extract_items(payload):
+                merged_items.append({**item, "node_id": str(node["id"])})
+
+        merged_items.sort(
+            key=lambda row: (
+                _as_int(row.get("created_at_ms") or row.get("ts_ms"), default=0),
+                _as_int(row.get("seen_count"), default=0),
+            ),
+            reverse=True,
+        )
+        return {"items": merged_items[:limit]}
+
+    @app.get("/api/aggregate/detections/top")
+    def api_aggregate_detections_top(
+        nodes: str | None = Query(default=None),
+        from_ms: int = Query(...),
+        to_ms: int = Query(...),
+        limit: int = Query(default=50, ge=1, le=500),
+    ) -> dict[str, Any]:
+        if to_ms < from_ms:
+            raise HTTPException(status_code=400, detail="to_ms must be >= from_ms")
+
+        target_nodes = _resolve_aggregate_nodes(nodes_csv=nodes, db_path=app.state.db_path)
+        merged: dict[tuple[str, str], dict[str, Any]] = {}
+
+        for node in target_nodes:
+            payload = _fetch_node_json(
+                node=node,
+                remote_path="/api/detections/top",
+                query_params={"from_ms": from_ms, "to_ms": to_ms, "limit": limit},
+            )
+            for item in _extract_items(payload):
+                anon_device_id = str(item.get("anon_device_id") or "")
+                transport = str(item.get("transport") or "")
+                if not anon_device_id or not transport:
+                    continue
+
+                observations = _as_int(item.get("observations"), default=0)
+                seen_total = _as_int(item.get("seen_total"), default=0)
+                avg_rssi_dbm = _as_float(item.get("avg_rssi_dbm"), default=0.0)
+                max_rssi_dbm = _as_int(item.get("max_rssi_dbm"), default=0)
+                first_seen_ms = _as_int(item.get("first_seen_ms"), default=0)
+                last_seen_ms = _as_int(item.get("last_seen_ms"), default=0)
+
+                key = (anon_device_id, transport)
+                current = merged.get(key)
+                if current is None:
+                    merged[key] = {
+                        "anon_device_id": anon_device_id,
+                        "transport": transport,
+                        "observations": observations,
+                        "seen_total": seen_total,
+                        "avg_rssi_dbm": avg_rssi_dbm,
+                        "max_rssi_dbm": max_rssi_dbm,
+                        "first_seen_ms": first_seen_ms,
+                        "last_seen_ms": last_seen_ms,
+                        "_rssi_weight": max(0, observations),
+                    }
+                    continue
+
+                prev_weight = _as_int(current.get("_rssi_weight"), default=0)
+                obs_weight = max(0, observations)
+                next_weight = prev_weight + obs_weight
+                if next_weight > 0:
+                    current["avg_rssi_dbm"] = (
+                        (_as_float(current.get("avg_rssi_dbm"), default=0.0) * prev_weight)
+                        + (avg_rssi_dbm * obs_weight)
+                    ) / next_weight
+                current["_rssi_weight"] = next_weight
+                current["observations"] = _as_int(current.get("observations"), default=0) + observations
+                current["seen_total"] = _as_int(current.get("seen_total"), default=0) + seen_total
+                current["max_rssi_dbm"] = max(_as_int(current.get("max_rssi_dbm"), default=0), max_rssi_dbm)
+                current_first = _as_int(current.get("first_seen_ms"), default=0)
+                if first_seen_ms > 0:
+                    current["first_seen_ms"] = first_seen_ms if current_first <= 0 else min(current_first, first_seen_ms)
+                current["last_seen_ms"] = max(_as_int(current.get("last_seen_ms"), default=0), last_seen_ms)
+
+        items: list[dict[str, Any]] = []
+        for entry in merged.values():
+            items.append({k: v for k, v in entry.items() if k != "_rssi_weight"})
+
+        items.sort(
+            key=lambda row: (
+                _as_int(row.get("observations"), default=0),
+                _as_int(row.get("seen_total"), default=0),
+                _as_int(row.get("last_seen_ms"), default=0),
+            ),
+            reverse=True,
+        )
+        return {"items": items[:limit]}
 
     @app.get("/api/nodes/{node_id}/kpis/now")
     def api_node_kpis_now(
