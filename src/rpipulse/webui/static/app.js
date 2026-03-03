@@ -98,9 +98,14 @@
     return `/api/detections/top?from_ms=${from}&to_ms=${now}&limit=${limit || 50}`;
   }
 
-  async function hydrateDashboard() {
+  function dashboardKpisUrl(nodeId) {
+    if (!nodeId) return "/api/kpis/now";
+    return `/api/nodes/${encodeURIComponent(nodeId)}/kpis/now`;
+  }
+
+  async function hydrateDashboard(nodeId) {
     const [kpis, hourlySeries, latest, recentDetections] = await Promise.all([
-      fetchJson("/api/kpis/now"),
+      fetchJson(dashboardKpisUrl(nodeId)),
       fetchJson("/api/series/hourly"),
       fetchJson("/api/observations/latest?limit=5"),
       fetchJson("/api/detections/recent?seconds=300&limit=10"),
@@ -578,11 +583,81 @@
     await loadConfig();
   }
 
+  async function initDashboard() {
+    const selector = document.getElementById("dashboard-node-select");
+    const hint = document.getElementById("dashboard-node-hint");
+
+    function updateHint(nodes, selectedId) {
+      if (!hint) return;
+      if (!selectedId) {
+        hint.textContent = nodes.length ? "Selecciona un nodo (o usa hub local)" : "Modo standalone (hub local)";
+        return;
+      }
+      const node = nodes.find(function (item) {
+        return item.id === selectedId;
+      });
+      if (!node) {
+        hint.textContent = "Nodo seleccionado";
+        return;
+      }
+      hint.textContent = node.host ? `Fuente: ${node.name} (${node.host})` : `Fuente: ${node.name}`;
+    }
+
+    if (!selector) {
+      await hydrateDashboard(null);
+      return;
+    }
+
+    const payload = await fetchJson("/api/nodes");
+    const nodes = payload && Array.isArray(payload.nodes)
+      ? payload.nodes
+          .map(function (row) {
+            if (!row || !row.id) return null;
+            return {
+              id: String(row.id),
+              name: String(row.name || row.id),
+              host: row.host ? String(row.host) : "",
+            };
+          })
+          .filter(Boolean)
+      : [];
+
+    selector.innerHTML = "";
+    const localOption = document.createElement("option");
+    localOption.value = "";
+    localOption.textContent = "Hub local";
+    selector.appendChild(localOption);
+
+    nodes.forEach(function (node) {
+      const option = document.createElement("option");
+      option.value = node.id;
+      option.textContent = node.name;
+      selector.appendChild(option);
+    });
+
+    // Prefer a real scanning node by default.
+    // If rpi-radio exists, select it.
+    // Otherwise, if any node exists, select the first one.
+    if (nodes.length) {
+      const preferred = nodes.find(function (n) { return n.id === "rpi-radio"; });
+      selector.value = preferred ? preferred.id : nodes[0].id;
+    }
+
+    updateHint(nodes, selector.value || "");
+    await hydrateDashboard(selector.value || null);
+
+    selector.addEventListener("change", function () {
+      const selectedId = selector.value || "";
+      updateHint(nodes, selectedId);
+      hydrateDashboard(selectedId || null);
+    });
+  }
+
   function init() {
     const pageRoot = document.querySelector("[data-page]");
     if (!pageRoot) return;
     const page = pageRoot.getAttribute("data-page");
-    if (page === "dashboard") hydrateDashboard();
+    if (page === "dashboard") initDashboard();
     if (page === "trends") hydrateTrends();
     if (page === "monitor") hydrateMonitor();
     if (page === "sensors") hydrateSensors();

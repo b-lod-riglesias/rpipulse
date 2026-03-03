@@ -799,3 +799,189 @@ def latest_observations(limit: int = 20, db_path: Path = DEFAULT_DB_PATH) -> lis
         }
         for row in rows
     ]
+
+
+# ============ Nodes Table (for Terminal feature) ============
+
+
+def _ensure_nodes_schema(conn: sqlite3.Connection) -> None:
+    if _table_exists(conn, "nodes"):
+        cols = _table_columns(conn, "nodes")
+        required = {"id", "name", "host", "port", "user", "enabled", "created_at", "last_seen"}
+        if required.issubset(cols):
+            return
+        # Migration needed - simple approach: recreate if missing columns
+        if not required.issubset(cols):
+            conn.execute("DROP TABLE IF EXISTS nodes")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS nodes (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            host TEXT NOT NULL,
+            port INTEGER NOT NULL DEFAULT 22,
+            user TEXT NOT NULL,
+            password TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            last_seen TEXT
+        )
+        """
+    )
+
+
+def init_nodes_db(db_path: Path = DEFAULT_DB_PATH) -> None:
+    """Initialize nodes table - called separately or as part of init_db."""
+    with get_connection(db_path) as conn:
+        _ensure_nodes_schema(conn)
+        conn.commit()
+
+
+def get_all_nodes(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+    init_nodes_db(db_path)
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, host, port, user, enabled, created_at, last_seen
+            FROM nodes
+            ORDER BY name
+            """
+        ).fetchall()
+
+    output = []
+    for row in rows:
+        output.append({
+            "id": str(row[0]),
+            "name": str(row[1]),
+            "host": str(row[2]),
+            "port": int(row[3]),
+            "user": str(row[4]),
+            "enabled": bool(row[5]),
+            "created_at": str(row[6]),
+            "last_seen": str(row[7]) if row[7] else None,
+        })
+    return output
+
+
+def get_node(node_id: str, db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any] | None:
+    init_nodes_db(db_path)
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT id, name, host, port, user, password, enabled, created_at, last_seen
+            FROM nodes WHERE id = ?
+            """,
+            (node_id,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "id": str(row[0]),
+        "name": str(row[1]),
+        "host": str(row[2]),
+        "port": int(row[3]),
+        "user": str(row[4]),
+        "password": str(row[5]) if row[5] else None,
+        "enabled": bool(row[6]),
+        "created_at": str(row[7]),
+        "last_seen": str(row[8]) if row[8] else None,
+    }
+
+
+def create_node(
+    node_id: str,
+    name: str,
+    host: str,
+    port: int,
+    user: str,
+    password: str | None = None,
+    enabled: bool = True,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    init_nodes_db(db_path)
+    now = datetime.now(tz=timezone.utc).isoformat()
+
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO nodes (id, name, host, port, user, password, enabled, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (node_id, name, host, port, user, password, 1 if enabled else 0, now),
+        )
+        conn.commit()
+
+    return get_node(node_id, db_path)
+
+
+def update_node_last_seen(node_id: str, db_path: Path = DEFAULT_DB_PATH) -> None:
+    """Update last_seen timestamp for a node."""
+    now = datetime.now(tz=timezone.utc).isoformat()
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "UPDATE nodes SET last_seen = ? WHERE id = ?",
+            (now, node_id),
+        )
+        conn.commit()
+
+
+def update_node(
+    node_id: str,
+    name: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    user: str | None = None,
+    password: str | None = None,  # Not used - kept for API compatibility
+    enabled: bool | None = None,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    """Update an existing node."""
+    init_nodes_db(db_path)
+    
+    # Build dynamic update query
+    updates = []
+    values = []
+    
+    if name is not None:
+        updates.append("name = ?")
+        values.append(name)
+    if host is not None:
+        updates.append("host = ?")
+        values.append(host)
+    if port is not None:
+        updates.append("port = ?")
+        values.append(port)
+    if user is not None:
+        updates.append("user = ?")
+        values.append(user)
+    if enabled is not None:
+        updates.append("enabled = ?")
+        values.append(1 if enabled else 0)
+    
+    if not updates:
+        return get_node(node_id, db_path)
+    
+    values.append(node_id)
+    
+    with get_connection(db_path) as conn:
+        conn.execute(
+            f"UPDATE nodes SET {', '.join(updates)} WHERE id = ?",
+            tuple(values),
+        )
+        conn.commit()
+    
+    return get_node(node_id, db_path)
+
+
+def delete_node(node_id: str, db_path: Path = DEFAULT_DB_PATH) -> bool:
+    """Delete a node. Returns True if deleted, False if not found."""
+    init_nodes_db(db_path)
+    
+    with get_connection(db_path) as conn:
+        cursor = conn.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
+        conn.commit()
+    
+    return cursor.rowcount > 0

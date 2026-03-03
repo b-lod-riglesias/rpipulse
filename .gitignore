@@ -10,3 +10,9 @@ build/
 # SQLite local data
 data/rpipulse.sqlite
 data/*.sqlite
+
+# SQLite WAL/SHM
+data/*.sqlite-wal
+data/*.sqlite-shm
+data/*.sqlite-journal
+data/*.sqlite-*

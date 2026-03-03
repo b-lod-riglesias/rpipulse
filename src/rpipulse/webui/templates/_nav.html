@@ -1,8 +1,10 @@
+
 {% macro top_nav(active) -%}
 <nav class="hidden md:flex flex-1 items-center justify-center gap-1">
   <a class="rounded-md px-4 py-2 text-sm font-medium transition-colors {% if active == 'dashboard' %}bg-surface-highlight text-primary{% else %}text-text-muted hover:bg-surface-highlight hover:text-text-main{% endif %}" href="/dashboard">Dashboard Command</a>
   <a class="rounded-md px-4 py-2 text-sm font-medium transition-colors {% if active == 'trends' %}bg-surface-highlight text-primary{% else %}text-text-muted hover:bg-surface-highlight hover:text-text-main{% endif %}" href="/trends">Trend Intelligence</a>
   <a class="rounded-md px-4 py-2 text-sm font-medium transition-colors {% if active == 'monitor' %}bg-surface-highlight text-primary{% else %}text-text-muted hover:bg-surface-highlight hover:text-text-main{% endif %}" href="/monitor">Signal Monitor</a>
+  <a class="rounded-md px-4 py-2 text-sm font-medium transition-colors {% if active == 'terminal' %}bg-surface-highlight text-primary{% else %}text-text-muted hover:bg-surface-highlight hover:text-text-main{% endif %}" href="/terminal">Terminal</a>
   <a class="rounded-md px-4 py-2 text-sm font-medium transition-colors {% if active == 'sensors' %}bg-surface-highlight text-primary{% else %}text-text-muted hover:bg-surface-highlight hover:text-text-main{% endif %}" href="/sensors">Sensor Config</a>
 </nav>
 {%- endmacro %}
@@ -20,6 +22,10 @@
   <a class="flex items-center gap-3 px-3 py-2.5 rounded-md transition-colors group {% if active == 'monitor' %}bg-surface border border-surface-highlight text-primary{% else %}text-text-muted hover:bg-surface hover:text-white{% endif %}" href="/monitor">
     <span class="material-symbols-outlined">grid_3x3</span>
     <span class="hidden lg:block text-sm font-medium">Signal Monitor</span>
+  </a>
+  <a class="flex items-center gap-3 px-3 py-2.5 rounded-md transition-colors group {% if active == 'terminal' %}bg-surface border border-surface-highlight text-primary{% else %}text-text-muted hover:bg-surface hover:text-white{% endif %}" href="/terminal">
+    <span class="material-symbols-outlined">terminal</span>
+    <span class="hidden lg:block text-sm font-medium">Terminal</span>
   </a>
   <a class="flex items-center gap-3 px-3 py-2.5 rounded-md transition-colors group {% if active == 'sensors' %}bg-surface border border-surface-highlight text-primary{% else %}text-text-muted hover:bg-surface hover:text-white{% endif %}" href="/sensors">
     <span class="material-symbols-outlined">settings_input_component</span>

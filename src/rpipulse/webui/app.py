@@ -6,6 +6,9 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -144,6 +147,61 @@ def _kpis_now(db_path: Path) -> dict[str, Any]:
     }
 
 
+def _require_node_proxy_access(token: str | None) -> None:
+    """Access gate for node-proxy endpoints.
+
+    The dashboard needs to read KPIs from *registered* nodes without forcing an
+    admin token (typical internal LAN use-case).
+
+    If an admin token is configured, we still accept it, but we do NOT require
+    it for these read-only proxy endpoints.
+
+    Keep stronger auth requirements for truly sensitive features (e.g. terminal).
+    """
+
+    admin_token = os.environ.get("RPIPULSE_ADMIN_TOKEN", "")
+
+    # If an admin token is configured and a token is provided but wrong, reject.
+    if admin_token and token is not None and token != admin_token:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # If token matches (or token omitted), allow read-only proxy.
+    return
+
+
+def _get_enabled_node(node_id: str, db_path: Path) -> dict[str, Any]:
+    from rpipulse.db import get_node
+
+    node = get_node(node_id=node_id, db_path=db_path)
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    if not node.get("enabled", False):
+        raise HTTPException(status_code=403, detail="Node is disabled")
+    return node
+
+
+def _fetch_node_json(
+    *,
+    node: dict[str, Any],
+    remote_path: str,
+    query_params: dict[str, Any] | None = None,
+    timeout_s: float = 2.5,
+) -> Any:
+    url = f"http://{node['host']}:{int(node['port'])}{remote_path}"
+    if query_params:
+        url = f"{url}?{urllib_parse.urlencode(query_params)}"
+    request = urllib_request.Request(url=url, method="GET", headers={"Accept": "application/json"})
+    try:
+        with urllib_request.urlopen(request, timeout=timeout_s) as response:
+            payload = response.read()
+            charset = response.headers.get_content_charset() or "utf-8"
+            return json.loads(payload.decode(charset))
+    except urllib_error.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Remote node returned HTTP {exc.code}") from exc
+    except (urllib_error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=502, detail="Failed to fetch remote node payload") from exc
+
+
 def create_app(db_path: Path | None = None) -> FastAPI:
     app = FastAPI(title="RPIpulse Web UI", version="1.0.0")
     app.state.db_path = resolve_db_path(db_path)
@@ -175,6 +233,29 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     @app.get("/sensors", response_class=HTMLResponse)
     def sensors(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(request, "sensors.html")
+    @app.get("/terminal", response_class=HTMLResponse)
+    def terminal_page(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(request, "terminal.html")
+
+    @app.get("/terminal/{node_id}", response_class=HTMLResponse)
+    def terminal_node(request: Request, node_id: str) -> HTMLResponse:
+        return templates.TemplateResponse(request, "terminal.html", {"node_id": node_id})
+
+    @app.get("/api/nodes")
+    def api_nodes() -> dict[str, Any]:
+        """List all nodes (public endpoint for terminal UI)."""
+        from rpipulse.db import get_all_nodes
+        try:
+            nodes = get_all_nodes(db_path=app.state.db_path)
+            # Don't expose passwords
+            for node in nodes:
+                node.pop("password", None)
+            return {"nodes": nodes}
+        except Exception:
+            # If nodes table doesn't exist yet, return empty list
+            return {"nodes": []}
+
+
 
     @app.get("/api/observations/latest")
     def api_observations_latest(limit: int = Query(default=20, ge=1, le=500)) -> dict[str, Any]:
@@ -232,6 +313,38 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     def api_kpis_now() -> dict[str, Any]:
         return _kpis_now(app.state.db_path)
 
+    @app.get("/api/nodes/{node_id}/kpis/now")
+    def api_node_kpis_now(
+        node_id: str,
+        token: str | None = Query(default=None),
+    ) -> Any:
+        _require_node_proxy_access(token)
+        node = _get_enabled_node(node_id=node_id, db_path=app.state.db_path)
+        return _fetch_node_json(node=node, remote_path="/api/kpis/now")
+
+    @app.get("/api/nodes/{node_id}/observations/latest")
+    def api_node_observations_latest(
+        node_id: str,
+        token: str | None = Query(default=None),
+    ) -> Any:
+        _require_node_proxy_access(token)
+        node = _get_enabled_node(node_id=node_id, db_path=app.state.db_path)
+        return _fetch_node_json(node=node, remote_path="/api/observations/latest")
+
+    @app.get("/api/nodes/{node_id}/observations/recent")
+    def api_node_observations_recent(
+        node_id: str,
+        token: str | None = Query(default=None),
+        limit: int = Query(default=20, ge=1, le=500),
+    ) -> Any:
+        _require_node_proxy_access(token)
+        node = _get_enabled_node(node_id=node_id, db_path=app.state.db_path)
+        return _fetch_node_json(
+            node=node,
+            remote_path="/api/observations/recent",
+            query_params={"limit": limit},
+        )
+
     @app.get("/api/stream/observations")
     async def api_observations_stream(request: Request, interval_s: float = Query(default=3.0, ge=1.0, le=10.0)) -> StreamingResponse:
         async def event_stream() -> Any:
@@ -254,6 +367,16 @@ def create_app(db_path: Path | None = None) -> FastAPI:
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
         )
 
+
+    # Include terminal routes when optional terminal dependencies are installed.
+    try:
+        from rpipulse.terminal import router as terminal_router, create_nodes_router
+    except ModuleNotFoundError:
+        terminal_router = None
+        create_nodes_router = None
+    if terminal_router is not None and create_nodes_router is not None:
+        app.include_router(terminal_router)
+        app.include_router(create_nodes_router())
     return app
 
 

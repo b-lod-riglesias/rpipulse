@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import importlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from starlette.requests import Request
 
-from rpipulse.db import init_db, insert_observation
+from rpipulse.db import create_node, init_db, insert_observation
 from rpipulse.webui.app import create_app
+
+webui_app_module = importlib.import_module("rpipulse.webui.app")
 
 
 def _ms(dt: datetime) -> int:
@@ -138,3 +141,78 @@ def test_webui_detection_and_config_endpoints(tmp_path: Path) -> None:
     config_after = _route(app, "/api/config", method="PUT").endpoint(payload={"duration": 21, "retention_days": 11})
     assert config_after["config"]["duration"] == 21
     assert config_after["config"]["retention_days"] == 11
+
+
+def test_node_kpis_proxy_allows_without_token(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "ui.sqlite"
+    _seed(db_path)
+    create_node("n1", "Node 1", "10.0.0.2", 8000, "rpipulse", enabled=True, db_path=db_path)
+    app = create_app(db_path=db_path)
+    route = _route(app, "/api/nodes/{node_id}/kpis/now")
+
+    # No token required for read-only KPI proxy endpoints
+    monkeypatch.delenv("RPIPULSE_ADMIN_TOKEN", raising=False)
+    monkeypatch.setattr(webui_app_module, "_fetch_node_json", lambda **kwargs: {"ok": True, "node": kwargs["node"]["id"]})
+
+    data = route.endpoint(node_id="n1", token=None)
+    assert data["ok"] is True
+    assert data["node"] == "n1"
+def test_node_kpis_proxy_rejects_wrong_token_when_configured(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "ui.sqlite"
+    _seed(db_path)
+    create_node("n1", "Node 1", "10.0.0.2", 8000, "rpipulse", enabled=True, db_path=db_path)
+    app = create_app(db_path=db_path)
+    route = _route(app, "/api/nodes/{node_id}/kpis/now")
+
+    monkeypatch.setenv("RPIPULSE_ADMIN_TOKEN", "secret-token")
+    monkeypatch.setattr(webui_app_module, "_fetch_node_json", lambda **kwargs: {"status": "ok"})
+
+    # Wrong token should be rejected
+    try:
+        route.endpoint(node_id="n1", token="wrong")
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 401
+    else:
+        raise AssertionError("Expected HTTPException 401")
+
+    # Missing token should still be allowed for read-only proxy
+    assert route.endpoint(node_id="n1", token=None) == {"status": "ok"}
+def test_node_observations_proxy_forwards_limit(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "ui.sqlite"
+    _seed(db_path)
+    create_node("n1", "Node 1", "10.0.0.2", 8000, "rpipulse", enabled=True, db_path=db_path)
+    app = create_app(db_path=db_path)
+    route = _route(app, "/api/nodes/{node_id}/observations/recent")
+
+    monkeypatch.delenv("RPIPULSE_ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("RPIPULSE_ENABLE_TERMINAL", "1")
+    calls: list[dict] = []
+
+    def _fake_fetch(**kwargs):
+        calls.append(kwargs)
+        return {"items": []}
+
+    monkeypatch.setattr(webui_app_module, "_fetch_node_json", _fake_fetch)
+
+    response = route.endpoint(node_id="n1", token=None, limit=7)
+    assert response == {"items": []}
+    assert calls[0]["remote_path"] == "/api/observations/recent"
+    assert calls[0]["query_params"] == {"limit": 7}
+
+
+def test_node_proxy_rejects_disabled_node(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "ui.sqlite"
+    _seed(db_path)
+    create_node("n1", "Node 1", "10.0.0.2", 8000, "rpipulse", enabled=False, db_path=db_path)
+    app = create_app(db_path=db_path)
+    route = _route(app, "/api/nodes/{node_id}/kpis/now")
+
+    monkeypatch.delenv("RPIPULSE_ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("RPIPULSE_ENABLE_TERMINAL", "1")
+
+    try:
+        route.endpoint(node_id="n1", token=None)
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 403
+    else:
+        raise AssertionError("Expected HTTPException 403")

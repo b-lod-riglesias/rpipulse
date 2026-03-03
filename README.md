@@ -139,3 +139,17 @@ Endpoints usados por la UI:
 - `/api/observations/latest?limit=20`
 - `/api/stream/observations` (SSE)
 
+
+---
+
+## Variables de Entorno
+
+| Variable | Descripción | Default |
+|----------|-------------|---------|
+| `RPIPULSE_ENABLE_TERMINAL` | Habilita acceso terminal SSH a las Pi | `false` |
+| `RPIPULSE_ADMIN_TOKEN` | Token para autenticación en APIs administrativas | (generado automáticamente) |
+| `RPIPULSE_SSH_KEY_PATH` | Ruta a la key SSH privada | `/etc/rpipulse/ssh/id_ed25519` |
+
+## Despliegue SSH
+
+Ver [docs/SSH_DEPLOYMENT.md](docs/SSH_DEPLOYMENT.md) para guía completa de despliegue seguro.

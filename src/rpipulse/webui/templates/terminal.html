@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% from "_nav.html" import top_nav %}
+
+{% block title %}RpiPulse - Terminal{% endblock %}
+{% block head_extra %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+<style>
+  #terminal-container {
+    height: calc(100vh - 180px);
+    min-height: 400px;
+    padding: 12px;
+    background: #0d0d0d;
+    border-radius: 8px;
+  }
+  .xterm {
+    padding: 8px;
+  }
+  .xterm-viewport {
+    border-radius: 4px;
+  }
+  .connection-status {
+    transition: all 0.3s ease;
+  }
+  .status-connected {
+    background: rgba(39, 174, 96, 0.15);
+    border-color: #27AE60;
+    color: #27AE60;
+  }
+  .status-disconnected {
+    background: rgba(192, 57, 43, 0.15);
+    border-color: #C0392B;
+    color: #C0392B;
+  }
+  .status-connecting {
+    background: rgba(214, 158, 28, 0.15);
+    border-color: #D69E1C;
+    color: #D69E1C;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<header class="sticky top-0 z-50 w-full border-b border-surface-highlight bg-bg-dark/95 backdrop-blur-sm">
+  <div class="flex h-16 items-center justify-between px-6 lg:px-8">
+    <div class="flex items-center gap-4">
+      <div class="flex size-8 items-center justify-center rounded-lg bg-primary/20 text-primary">
+        <span class="material-symbols-outlined">wifi_tethering</span>
+      </div>
+      <h1 class="text-xl font-bold tracking-tight font-display text-text-main">RpiPulse</h1>
+    </div>
+    {{ top_nav('terminal') }}
+  </div>
+</header>
+
+<main class="flex-1 p-6 lg:p-8 max-w-[1800px] mx-auto w-full" data-page="terminal">
+  <div class="flex flex-wrap items-end justify-between gap-4 pb-4 border-b border-surface-highlight mb-6">
+    <div>
+      <h2 class="text-2xl font-bold tracking-tight font-display text-text-main">Terminal Access</h2>
+      <p class="mt-1 text-sm text-olive uppercase tracking-wider font-medium">Remote Shell Connection</p>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 xl:grid-cols-4 gap-6">
+    <!-- Node Selector Panel -->
+    <div class="xl:col-span-1 space-y-4">
+      <div class="rounded-lg border border-surface-highlight bg-surface p-5 shadow-xl">
+        <h3 class="text-sm font-bold text-text-muted uppercase tracking-wider font-display mb-4">Select Node</h3>
+        
+        <div id="node-selector-container" class="space-y-2 max-h-[300px] overflow-y-auto">
+          <!-- Nodes will be loaded here -->
+          <div class="text-sm text-text-muted py-2">Loading nodes...</div>
+        </div>
+        
+        <div class="mt-4 pt-4 border-t border-surface-highlight">
+          <button id="btn-refresh-nodes" class="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-md bg-surface-highlight text-text-main hover:bg-olive hover:text-white transition-colors text-sm font-medium">
+            <span class="material-symbols-outlined text-lg">refresh</span>
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <!-- Connection Info -->
+      <div class="rounded-lg border border-surface-highlight bg-surface p-5 shadow-xl">
+        <h3 class="text-sm font-bold text-text-muted uppercase tracking-wider font-display mb-4">Connection</h3>
+        
+        <div class="space-y-3 text-sm">
+          <div class="flex justify-between items-center">
+            <span class="text-text-muted">Status</span>
+            <span id="connection-status" class="px-3 py-1 rounded-full text-xs font-mono border connection-status status-disconnected">DISCONNECTED</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-text-muted">Node</span>
+            <span id="current-node" class="font-mono text-text-main">--</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-text-muted">IP</span>
+            <span id="current-ip" class="font-mono text-primary">--</span>
+          </div>
+        </div>
+
+        <div class="mt-4 pt-4 border-t border-surface-highlight space-y-2">
+          <button id="btn-open-terminal" disabled class="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-md bg-primary text-bg-dark hover:bg-primary/90 transition-colors text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed">
+            <span class="material-symbols-outlined text-lg">terminal</span>
+            Open Terminal
+          </button>
+          <button id="btn-close-terminal" disabled class="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-md border border-accent-red text-accent-red hover:bg-accent-red hover:text-white transition-colors text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed">
+            <span class="material-symbols-outlined text-lg">close</span>
+            Disconnect
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Terminal View -->
+    <div class="xl:col-span-3">
+      <div class="rounded-lg border border-surface-highlight bg-surface p-1 shadow-xl h-full flex flex-col">
+        <div class="flex items-center justify-between px-4 py-3 bg-surface-highlight rounded-t-lg">
+          <div class="flex items-center gap-3">
+            <span class="material-symbols-outlined text-primary">terminal</span>
+            <span id="terminal-title" class="font-mono text-sm text-text-main">No terminal connected</span>
+          </div>
+          <div id="terminal-actions" class="flex items-center gap-2">
+            <button id="btn-clear-terminal" disabled class="p-2 rounded hover:bg-surface text-text-muted hover:text-text-main transition-colors disabled:opacity-40 disabled:cursor-not-allowed" title="Clear terminal">
+              <span class="material-symbols-outlined text-lg">delete_sweep</span>
+            </button>
+          </div>
+        </div>
+        <div id="terminal-container" class="flex-1">
+          <div id="terminal-placeholder" class="h-full flex flex-col items-center justify-center text-text-muted">
+            <span class="material-symbols-outlined text-6xl mb-4 opacity-30">terminal</span>
+            <p class="text-lg font-medium">Select a node and click "Open Terminal"</p>
+            <p class="text-sm mt-2 opacity-60">Connect to a Raspberry Pi to start a remote shell session</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Admin Token Modal -->
+  <div id="token-modal" class="fixed inset-0 z-[60] hidden">
+    <div class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
+    <div class="flex items-center justify-center min-h-screen p-4">
+      <div class="relative bg-surface border border-surface-highlight rounded-lg shadow-2xl max-w-md w-full p-6">
+        <h3 class="text-lg font-bold font-display text-text-main mb-4">Admin Authentication Required</h3>
+        <p class="text-sm text-text-muted mb-4">Enter your admin token to connect to the terminal. The token will be stored in your session.</p>
+        <input type="password" id="admin-token-input" class="w-full px-4 py-3 rounded-md bg-bg-dark border border-surface-highlight text-text-main font-mono focus:outline-none focus:border-primary" placeholder="Enter admin token..." />
+        <div class="flex gap-3 mt-6">
+          <button id="btn-cancel-token" class="flex-1 px-4 py-2 rounded-md border border-surface-highlight text-text-muted hover:bg-surface-highlight transition-colors font-medium">Cancel</button>
+          <button id="btn-confirm-token" class="flex-1 px-4 py-2 rounded-md bg-primary text-bg-dark hover:bg-primary/90 transition-colors font-bold">Connect</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+{% endblock %}
+
+{% block page_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+<script src="/static/terminal.js"></script>
+{% endblock %}
