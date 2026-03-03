@@ -1,6 +1,10 @@
 (function () {
   "use strict";
 
+  const DEFAULT_NODE_ID = "rpi-radio";
+  const NODE_STORAGE_KEY = "rpipulse:selected-node-id";
+  let nodesCachePromise = null;
+
   async function fetchJson(url, options) {
     try {
       const response = await fetch(url, {
@@ -70,6 +74,141 @@
     body.innerHTML = rows.map(rowBuilder).join("");
   }
 
+  function normalizeNodes(payload) {
+    if (!payload || !Array.isArray(payload.nodes)) return [];
+    return payload.nodes
+      .map(function (row) {
+        if (!row || !row.id) return null;
+        return {
+          id: String(row.id),
+          name: String(row.name || row.id),
+          host: row.host ? String(row.host) : "",
+        };
+      })
+      .filter(Boolean);
+  }
+
+  async function loadNodes() {
+    if (!nodesCachePromise) {
+      nodesCachePromise = (async function () {
+        const payload = await fetchJson("/api/nodes");
+        return normalizeNodes(payload);
+      })();
+    }
+    return nodesCachePromise;
+  }
+
+  function readStoredNodeId() {
+    try {
+      if (!window.localStorage) return "";
+      return window.localStorage.getItem(NODE_STORAGE_KEY) || "";
+    } catch (_err) {
+      return "";
+    }
+  }
+
+  function persistSelectedNodeId(nodeId) {
+    try {
+      if (!window.localStorage) return;
+      if (!nodeId) {
+        window.localStorage.removeItem(NODE_STORAGE_KEY);
+        return;
+      }
+      window.localStorage.setItem(NODE_STORAGE_KEY, nodeId);
+    } catch (_err) {
+      // Ignore storage restrictions.
+    }
+  }
+
+  function pickSelectedNodeId(nodes, requestedId) {
+    if (!nodes.length) return "";
+
+    if (requestedId && nodes.some(function (node) { return node.id === requestedId; })) {
+      return requestedId;
+    }
+
+    const storedId = readStoredNodeId();
+    if (storedId && nodes.some(function (node) { return node.id === storedId; })) {
+      return storedId;
+    }
+
+    if (nodes.length === 1) {
+      return nodes[0].id;
+    }
+
+    const preferred = nodes.find(function (node) { return node.id === DEFAULT_NODE_ID; });
+    return preferred ? preferred.id : nodes[0].id;
+  }
+
+  async function resolveNodeContext(requestedId) {
+    const nodes = await loadNodes();
+    const selectedId = pickSelectedNodeId(nodes, requestedId);
+    persistSelectedNodeId(selectedId);
+    return { nodes, selectedId };
+  }
+
+  function withQuery(url, params) {
+    if (!params) return url;
+    const search = new URLSearchParams();
+    Object.keys(params).forEach(function (key) {
+      const value = params[key];
+      if (value === null || value === undefined || value === "") return;
+      search.set(key, String(value));
+    });
+    const qs = search.toString();
+    return qs ? `${url}?${qs}` : url;
+  }
+
+  function nodeApiUrl(nodeId, nodeSuffix, localPath, params) {
+    const base = nodeId
+      ? `/api/nodes/${encodeURIComponent(nodeId)}${nodeSuffix}`
+      : localPath;
+    return withQuery(base, params);
+  }
+
+  function dashboardKpisUrl(nodeId) {
+    return nodeApiUrl(nodeId, "/kpis/now", "/api/kpis/now");
+  }
+
+  function hourlySeriesUrl(nodeId) {
+    return nodeApiUrl(nodeId, "/series/hourly", "/api/series/hourly");
+  }
+
+  function dailySeriesUrl(nodeId) {
+    return nodeApiUrl(nodeId, "/series/daily", "/api/series/daily");
+  }
+
+  function observationsLatestUrl(nodeId, limit) {
+    return nodeApiUrl(nodeId, "/observations/latest", "/api/observations/latest", { limit: limit || 20 });
+  }
+
+  function detectionsRecentUrl(nodeId, seconds, limit) {
+    return nodeApiUrl(nodeId, "/detections/recent", "/api/detections/recent", {
+      seconds: seconds || 300,
+      limit: limit || 200,
+    });
+  }
+
+  function detectionsTopUrl(nodeId, limit) {
+    const now = Date.now();
+    const from = now - 24 * 60 * 60 * 1000;
+    return nodeApiUrl(nodeId, "/detections/top", "/api/detections/top", {
+      from_ms: from,
+      to_ms: now,
+      limit: limit || 50,
+    });
+  }
+
+  function sensorConfigUrl(nodeId) {
+    return nodeApiUrl(nodeId, "/config", "/api/config");
+  }
+
+  function unwrapConfigPayload(payload) {
+    if (!payload || typeof payload !== "object") return null;
+    if (payload.config && typeof payload.config === "object") return payload.config;
+    return payload;
+  }
+
   function detectionDeviceId(row) {
     const raw = row && (row.anon_device_id || row.device_id || row.device || row.id);
     if (!raw) return "--";
@@ -92,23 +231,12 @@
     return row.first_seen || row.first_seen_iso || row.first_seen_at || row.first_seen_ms;
   }
 
-  function buildDetectionTopUrl(limit) {
-    const now = Date.now();
-    const from = now - 24 * 60 * 60 * 1000;
-    return `/api/detections/top?from_ms=${from}&to_ms=${now}&limit=${limit || 50}`;
-  }
-
-  function dashboardKpisUrl(nodeId) {
-    if (!nodeId) return "/api/kpis/now";
-    return `/api/nodes/${encodeURIComponent(nodeId)}/kpis/now`;
-  }
-
   async function hydrateDashboard(nodeId) {
     const [kpis, hourlySeries, latest, recentDetections] = await Promise.all([
       fetchJson(dashboardKpisUrl(nodeId)),
-      fetchJson("/api/series/hourly"),
-      fetchJson("/api/observations/latest?limit=5"),
-      fetchJson("/api/detections/recent?seconds=300&limit=10"),
+      fetchJson(hourlySeriesUrl(nodeId)),
+      fetchJson(observationsLatestUrl(nodeId, 5)),
+      fetchJson(detectionsRecentUrl(nodeId, 300, 10)),
     ]);
 
     const obs = kpis && kpis.observation ? kpis.observation : null;
@@ -186,15 +314,17 @@
     );
     setText(
       "dashboard-detections-note",
-      recentDetections ? "Last 5 minutes via /api/detections/recent" : "Detection API not available yet"
+      recentDetections
+        ? `Last 5 minutes via ${nodeId ? "/api/nodes/{id}/detections/recent" : "/api/detections/recent"}`
+        : "Detection API not available yet"
     );
   }
 
-  async function hydrateTrends() {
+  async function hydrateTrends(nodeId) {
     const [daily, hourly, topDetections] = await Promise.all([
-      fetchJson("/api/series/daily"),
-      fetchJson("/api/series/hourly"),
-      fetchJson(buildDetectionTopUrl(20)),
+      fetchJson(dailySeriesUrl(nodeId)),
+      fetchJson(hourlySeriesUrl(nodeId)),
+      fetchJson(detectionsTopUrl(nodeId, 20)),
     ]);
 
     const dailyItems = asArray(daily);
@@ -270,7 +400,7 @@
     setText(
       "trends-top-note",
       topDetections
-        ? "Top devices over last 24h via /api/detections/top"
+        ? `Top devices over last 24h via ${nodeId ? "/api/nodes/{id}/detections/top" : "/api/detections/top"}`
         : "Top detections API not available yet"
     );
 
@@ -324,7 +454,9 @@
         },
       },
     });
-    if (note) note.textContent = "Daily peak chart rendered from /api/series/daily.";
+    if (note) {
+      note.textContent = `Daily peak chart rendered from ${nodeId ? "/api/nodes/{id}/series/daily" : "/api/series/daily"}.`;
+    }
   }
 
   function normalizeDetectionRow(row) {
@@ -499,7 +631,7 @@
     }, 2600);
   }
 
-  async function hydrateSensors() {
+  async function hydrateSensors(nodeId) {
     const form = document.getElementById("sensors-config-form");
     if (!form) return;
 
@@ -507,6 +639,7 @@
     const reloadBtn = document.getElementById("sensors-reload-btn");
     const statusNode = document.getElementById("sensors-status");
     const loadedNode = document.getElementById("sensors-last-loaded");
+    const configUrl = sensorConfigUrl(nodeId);
 
     const fields = {
       scan_interval_s: document.getElementById("scan_interval_s"),
@@ -541,13 +674,14 @@
     }
 
     async function loadConfig() {
-      setStatus("Loading config from /api/config ...", false);
-      const payload = await fetchJson("/api/config");
-      if (!payload) {
-        setStatus("/api/config not available yet.", true);
+      setStatus(`Loading config from ${configUrl} ...`, false);
+      const payload = await fetchJson(configUrl);
+      const config = unwrapConfigPayload(payload);
+      if (!config) {
+        setStatus(`${configUrl} not available yet.`, true);
         return;
       }
-      applyPayload(payload);
+      applyPayload(config);
       if (loadedNode) loadedNode.textContent = fmtTs(new Date().toISOString());
       setStatus("Config loaded.", false);
     }
@@ -557,7 +691,7 @@
       const payload = collectPayload();
       if (saveBtn) saveBtn.setAttribute("disabled", "disabled");
       setStatus("Saving config ...", false);
-      const response = await putJson("/api/config", payload);
+      const response = await putJson(configUrl, payload);
       if (saveBtn) saveBtn.removeAttribute("disabled");
 
       if (!response.ok) {
@@ -566,8 +700,9 @@
         return;
       }
 
-      if (response.data && typeof response.data === "object") {
-        applyPayload(response.data);
+      const updatedConfig = unwrapConfigPayload(response.data);
+      if (updatedConfig && typeof updatedConfig === "object") {
+        applyPayload(updatedConfig);
       }
       setStatus("Config saved.", false);
       if (loadedNode) loadedNode.textContent = fmtTs(new Date().toISOString());
@@ -600,27 +735,18 @@
         hint.textContent = "Nodo seleccionado";
         return;
       }
-      hint.textContent = node.host ? `Fuente: ${node.name} (${node.host})` : `Fuente: ${node.name}`;
+      hint.textContent = `Fuente: ${node.name} (${node.host || "host n/a"})`;
     }
+
+    const context = await resolveNodeContext();
+    const nodes = context.nodes;
+    const initialNodeId = context.selectedId || "";
 
     if (!selector) {
-      await hydrateDashboard(null);
+      updateHint(nodes, initialNodeId);
+      await hydrateDashboard(initialNodeId || null);
       return;
     }
-
-    const payload = await fetchJson("/api/nodes");
-    const nodes = payload && Array.isArray(payload.nodes)
-      ? payload.nodes
-          .map(function (row) {
-            if (!row || !row.id) return null;
-            return {
-              id: String(row.id),
-              name: String(row.name || row.id),
-              host: row.host ? String(row.host) : "",
-            };
-          })
-          .filter(Boolean)
-      : [];
 
     selector.innerHTML = "";
     const localOption = document.createElement("option");
@@ -635,12 +761,8 @@
       selector.appendChild(option);
     });
 
-    // Prefer a real scanning node by default.
-    // If rpi-radio exists, select it.
-    // Otherwise, if any node exists, select the first one.
-    if (nodes.length) {
-      const preferred = nodes.find(function (n) { return n.id === "rpi-radio"; });
-      selector.value = preferred ? preferred.id : nodes[0].id;
+    if (initialNodeId) {
+      selector.value = initialNodeId;
     }
 
     updateHint(nodes, selector.value || "");
@@ -648,23 +770,43 @@
 
     selector.addEventListener("change", function () {
       const selectedId = selector.value || "";
+      persistSelectedNodeId(selectedId);
       updateHint(nodes, selectedId);
       hydrateDashboard(selectedId || null);
     });
   }
 
-  function init() {
+  async function init() {
     const pageRoot = document.querySelector("[data-page]");
     if (!pageRoot) return;
     const page = pageRoot.getAttribute("data-page");
-    if (page === "dashboard") initDashboard();
-    if (page === "trends") hydrateTrends();
-    if (page === "monitor") hydrateMonitor();
-    if (page === "sensors") hydrateSensors();
+
+    if (page === "dashboard") {
+      await initDashboard();
+      return;
+    }
+
+    if (page === "trends") {
+      const context = await resolveNodeContext();
+      await hydrateTrends(context.selectedId || null);
+      return;
+    }
+
+    if (page === "monitor") {
+      await hydrateMonitor();
+      return;
+    }
+
+    if (page === "sensors") {
+      const context = await resolveNodeContext();
+      await hydrateSensors(context.selectedId || null);
+    }
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
+    document.addEventListener("DOMContentLoaded", function () {
+      init();
+    });
   } else {
     init();
   }

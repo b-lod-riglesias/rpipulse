@@ -169,6 +169,14 @@ def _require_node_proxy_access(token: str | None) -> None:
     return
 
 
+def _require_admin_token(token: str | None) -> None:
+    """Require a valid admin token for mutating node-proxy endpoints."""
+
+    admin_token = os.environ.get("RPIPULSE_ADMIN_TOKEN", "")
+    if not admin_token or token != admin_token:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 def _get_enabled_node(node_id: str, db_path: Path) -> dict[str, Any]:
     from rpipulse.db import get_node
 
@@ -200,6 +208,32 @@ def _fetch_node_json(
         raise HTTPException(status_code=502, detail=f"Remote node returned HTTP {exc.code}") from exc
     except (urllib_error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=502, detail="Failed to fetch remote node payload") from exc
+
+
+def _put_node_json(
+    *,
+    node: dict[str, Any],
+    remote_path: str,
+    payload: dict[str, Any],
+    timeout_s: float = 2.5,
+) -> Any:
+    url = f"http://{node['host']}:{int(node['port'])}{remote_path}"
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib_request.Request(
+        url=url,
+        data=body,
+        method="PUT",
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=timeout_s) as response:
+            data = response.read()
+            charset = response.headers.get_content_charset() or "utf-8"
+            return json.loads(data.decode(charset))
+    except urllib_error.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Remote node returned HTTP {exc.code}") from exc
+    except (urllib_error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=502, detail="Failed to update remote node payload") from exc
 
 
 def create_app(db_path: Path | None = None) -> FastAPI:
@@ -344,6 +378,76 @@ def create_app(db_path: Path | None = None) -> FastAPI:
             remote_path="/api/observations/recent",
             query_params={"limit": limit},
         )
+
+    @app.get("/api/nodes/{node_id}/series/hourly")
+    def api_node_series_hourly(
+        node_id: str,
+        token: str | None = Query(default=None),
+    ) -> Any:
+        _require_node_proxy_access(token)
+        node = _get_enabled_node(node_id=node_id, db_path=app.state.db_path)
+        return _fetch_node_json(node=node, remote_path="/api/series/hourly")
+
+    @app.get("/api/nodes/{node_id}/series/daily")
+    def api_node_series_daily(
+        node_id: str,
+        token: str | None = Query(default=None),
+    ) -> Any:
+        _require_node_proxy_access(token)
+        node = _get_enabled_node(node_id=node_id, db_path=app.state.db_path)
+        return _fetch_node_json(node=node, remote_path="/api/series/daily")
+
+    @app.get("/api/nodes/{node_id}/detections/recent")
+    def api_node_detections_recent(
+        node_id: str,
+        token: str | None = Query(default=None),
+        seconds: int = Query(default=300, ge=1, le=86_400),
+        limit: int = Query(default=200, ge=1, le=1_000),
+    ) -> Any:
+        _require_node_proxy_access(token)
+        node = _get_enabled_node(node_id=node_id, db_path=app.state.db_path)
+        return _fetch_node_json(
+            node=node,
+            remote_path="/api/detections/recent",
+            query_params={"seconds": seconds, "limit": limit},
+        )
+
+    @app.get("/api/nodes/{node_id}/detections/top")
+    def api_node_detections_top(
+        node_id: str,
+        token: str | None = Query(default=None),
+        from_ms: int = Query(...),
+        to_ms: int = Query(...),
+        limit: int = Query(default=50, ge=1, le=500),
+    ) -> Any:
+        _require_node_proxy_access(token)
+        if to_ms < from_ms:
+            raise HTTPException(status_code=400, detail="to_ms must be >= from_ms")
+        node = _get_enabled_node(node_id=node_id, db_path=app.state.db_path)
+        return _fetch_node_json(
+            node=node,
+            remote_path="/api/detections/top",
+            query_params={"from_ms": from_ms, "to_ms": to_ms, "limit": limit},
+        )
+
+    @app.get("/api/nodes/{node_id}/config")
+    def api_node_config_get(
+        node_id: str,
+        token: str | None = Query(default=None),
+    ) -> Any:
+        _require_node_proxy_access(token)
+        node = _get_enabled_node(node_id=node_id, db_path=app.state.db_path)
+        return _fetch_node_json(node=node, remote_path="/api/config")
+
+    @app.put("/api/nodes/{node_id}/config")
+    def api_node_config_put(
+        node_id: str,
+        payload: dict[str, Any],
+        token: str | None = Query(default=None),
+    ) -> Any:
+        _require_admin_token(token)
+        node = _get_enabled_node(node_id=node_id, db_path=app.state.db_path)
+        return _put_node_json(node=node, remote_path="/api/config", payload=payload)
 
     @app.get("/api/stream/observations")
     async def api_observations_stream(request: Request, interval_s: float = Query(default=3.0, ge=1.0, le=10.0)) -> StreamingResponse:

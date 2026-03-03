@@ -216,3 +216,68 @@ def test_node_proxy_rejects_disabled_node(tmp_path: Path, monkeypatch) -> None:
         assert getattr(exc, "status_code", None) == 403
     else:
         raise AssertionError("Expected HTTPException 403")
+
+
+def test_node_proxy_series_and_detections_forward_query_params(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "ui.sqlite"
+    _seed(db_path)
+    create_node("n1", "Node 1", "10.0.0.2", 8000, "rpipulse", enabled=True, db_path=db_path)
+    app = create_app(db_path=db_path)
+
+    monkeypatch.delenv("RPIPULSE_ADMIN_TOKEN", raising=False)
+    calls: list[dict] = []
+
+    def _fake_fetch(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(webui_app_module, "_fetch_node_json", _fake_fetch)
+
+    _route(app, "/api/nodes/{node_id}/series/hourly").endpoint(node_id="n1", token=None)
+    _route(app, "/api/nodes/{node_id}/series/daily").endpoint(node_id="n1", token=None)
+    _route(app, "/api/nodes/{node_id}/detections/recent").endpoint(
+        node_id="n1", token=None, seconds=120, limit=9
+    )
+    _route(app, "/api/nodes/{node_id}/detections/top").endpoint(
+        node_id="n1", token=None, from_ms=1000, to_ms=5000, limit=11
+    )
+    _route(app, "/api/nodes/{node_id}/config").endpoint(node_id="n1", token=None)
+
+    assert [call["remote_path"] for call in calls] == [
+        "/api/series/hourly",
+        "/api/series/daily",
+        "/api/detections/recent",
+        "/api/detections/top",
+        "/api/config",
+    ]
+    assert calls[2]["query_params"] == {"seconds": 120, "limit": 9}
+    assert calls[3]["query_params"] == {"from_ms": 1000, "to_ms": 5000, "limit": 11}
+
+
+def test_node_config_put_requires_admin_token_and_passthrough_body(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "ui.sqlite"
+    _seed(db_path)
+    create_node("n1", "Node 1", "10.0.0.2", 8000, "rpipulse", enabled=True, db_path=db_path)
+    app = create_app(db_path=db_path)
+    route = _route(app, "/api/nodes/{node_id}/config", method="PUT")
+
+    monkeypatch.setenv("RPIPULSE_ADMIN_TOKEN", "secret-token")
+    calls: list[dict] = []
+
+    def _fake_put(**kwargs):
+        calls.append(kwargs)
+        return {"config": kwargs["payload"]}
+
+    monkeypatch.setattr(webui_app_module, "_put_node_json", _fake_put)
+
+    try:
+        route.endpoint(node_id="n1", token="wrong", payload={"duration": 25})
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 401
+    else:
+        raise AssertionError("Expected HTTPException 401")
+
+    response = route.endpoint(node_id="n1", token="secret-token", payload={"duration": 25, "interval": 2})
+    assert response == {"config": {"duration": 25, "interval": 2}}
+    assert calls[0]["remote_path"] == "/api/config"
+    assert calls[0]["payload"] == {"duration": 25, "interval": 2}
