@@ -99,7 +99,10 @@ def _build_sync_script(
             "#!/usr/bin/env bash",
             "set -euo pipefail",
             "",
-            f"exec {tool_path} --host {host_q} --user {user_q} --port {port_q} --name {name_q}",
+            f'DEFAULT_BOOTSTRAP_USER="${{SUDO_USER:-$(id -un)}}"',
+            f'BOOTSTRAP_USER="${{RPIPULSE_BOOTSTRAP_USER:-$DEFAULT_BOOTSTRAP_USER}}"',
+            f'if [[ -z "$BOOTSTRAP_USER" ]]; then BOOTSTRAP_USER={user_q}; fi',
+            f'exec {tool_path} --host {host_q} --user "$BOOTSTRAP_USER" --port {port_q} --name {name_q}',
             "",
         ]
     )
