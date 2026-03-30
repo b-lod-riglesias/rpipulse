@@ -76,6 +76,11 @@
         </div>
 
         <form id="raspberry-bootstrap-form" class="p-6 grid grid-cols-1 sm:grid-cols-2 gap-5">
+          <label class="block sm:col-span-2">
+            <span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">admin_token</span>
+            <input id="raspberry_admin_token" name="raspberry_admin_token" type="password" class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" placeholder="Token admin para generar el ejecutable" />
+          </label>
+
           <label class="block">
             <span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">name</span>
             <input id="raspberry_name" name="raspberry_name" type="text" required class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" placeholder="salon" />

@@ -64,6 +64,18 @@
     }
   }
 
+  function setAdminToken(token) {
+    try {
+      if (!token) {
+        sessionStorage.removeItem("rpipulse_admin_token");
+        return;
+      }
+      sessionStorage.setItem("rpipulse_admin_token", token);
+    } catch (_err) {
+      // Ignore storage restrictions.
+    }
+  }
+
 
   function asArray(payload) {
     if (Array.isArray(payload)) return payload;
@@ -956,6 +968,7 @@
     const bootstrapResult = document.getElementById("raspberry-bootstrap-result");
     const scriptPath = document.getElementById("raspberry-script-path");
     const scriptCommand = document.getElementById("raspberry-script-command");
+    const adminTokenInput = document.getElementById("raspberry_admin_token");
 
     function setBootstrapStatus(text, isError) {
       if (!bootstrapStatus) return;
@@ -965,9 +978,16 @@
     }
 
     if (bootstrapForm) {
+      if (adminTokenInput && !adminTokenInput.value) {
+        adminTokenInput.value = getAdminToken();
+      }
+
       bootstrapForm.addEventListener("submit", async function (event) {
         event.preventDefault();
         if (bootstrapBtn) bootstrapBtn.setAttribute("disabled", "disabled");
+
+        const tokenValue = adminTokenInput ? String(adminTokenInput.value || "").trim() : "";
+        setAdminToken(tokenValue);
 
         const payload = {
           id: (document.getElementById("raspberry_node_id") || {}).value || "",
