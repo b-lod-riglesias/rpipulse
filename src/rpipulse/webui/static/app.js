@@ -1,8 +1,12 @@
 (function () {
   "use strict";
 
-  const DEFAULT_NODE_ID = "rpi-radio";
-  const NODE_STORAGE_KEY = "rpipulse:selected-node-id";
+  const NODE_STORAGE_KEY = "rpipulse:selected-node-ids";
+  const LEGACY_NODE_STORAGE_KEY = "rpipulse:selected-node-id";
+  const NODE_QUERY_PARAM = "nodes";
+  const NODE_QUERY_ALL = "all";
+  const NODE_QUERY_LOCAL = "local";
+  const ALL_NODES_OPTION_VALUE = "__all__";
   let nodesCachePromise = null;
 
   async function fetchJson(url, options) {
@@ -107,53 +111,149 @@
     return nodesCachePromise;
   }
 
-  function readStoredNodeId() {
+  function sanitizeNodeIds(value) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    const ids = [];
+    value.forEach(function (item) {
+      if (!item) return;
+      const text = String(item).trim();
+      if (!text || seen.has(text)) return;
+      seen.add(text);
+      ids.push(text);
+    });
+    return ids;
+  }
+
+  function readStoredSelection() {
     try {
-      if (!window.localStorage) return "";
-      return window.localStorage.getItem(NODE_STORAGE_KEY) || "";
+      if (!window.localStorage) return { exists: false, nodeIds: [] };
+      const raw = window.localStorage.getItem(NODE_STORAGE_KEY);
+      if (raw !== null) {
+        const parsed = JSON.parse(raw);
+        const list = sanitizeNodeIds(parsed);
+        return { exists: true, nodeIds: list };
+      }
+      const legacy = window.localStorage.getItem(LEGACY_NODE_STORAGE_KEY) || "";
+      if (legacy) {
+        return { exists: true, nodeIds: [legacy] };
+      }
+      return { exists: false, nodeIds: [] };
     } catch (_err) {
-      return "";
+      return { exists: false, nodeIds: [] };
     }
   }
 
-  function persistSelectedNodeId(nodeId) {
+  function persistSelectedNodeIds(nodeIds) {
+    const selected = sanitizeNodeIds(nodeIds);
     try {
       if (!window.localStorage) return;
-      if (!nodeId) {
-        window.localStorage.removeItem(NODE_STORAGE_KEY);
-        return;
+      window.localStorage.setItem(NODE_STORAGE_KEY, JSON.stringify(selected));
+      if (selected.length) {
+        window.localStorage.setItem(LEGACY_NODE_STORAGE_KEY, selected[0]);
+      } else {
+        window.localStorage.removeItem(LEGACY_NODE_STORAGE_KEY);
       }
-      window.localStorage.setItem(NODE_STORAGE_KEY, nodeId);
     } catch (_err) {
       // Ignore storage restrictions.
     }
   }
 
-  function pickSelectedNodeId(nodes, requestedId) {
-    if (!nodes.length) return "";
-
-    if (requestedId && nodes.some(function (node) { return node.id === requestedId; })) {
-      return requestedId;
+  function readSelectionFromUrl() {
+    try {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has(NODE_QUERY_PARAM)) {
+        return { exists: false, kind: "", nodeIds: [] };
+      }
+      const raw = String(url.searchParams.get(NODE_QUERY_PARAM) || "").trim();
+      if (!raw || raw === NODE_QUERY_LOCAL) {
+        return { exists: true, kind: NODE_QUERY_LOCAL, nodeIds: [] };
+      }
+      if (raw === NODE_QUERY_ALL) {
+        return { exists: true, kind: NODE_QUERY_ALL, nodeIds: [] };
+      }
+      const csvIds = sanitizeNodeIds(raw.split(","));
+      return { exists: true, kind: "partial", nodeIds: csvIds };
+    } catch (_err) {
+      return { exists: false, kind: "", nodeIds: [] };
     }
-
-    const storedId = readStoredNodeId();
-    if (storedId && nodes.some(function (node) { return node.id === storedId; })) {
-      return storedId;
-    }
-
-    if (nodes.length === 1) {
-      return nodes[0].id;
-    }
-
-    const preferred = nodes.find(function (node) { return node.id === DEFAULT_NODE_ID; });
-    return preferred ? preferred.id : nodes[0].id;
   }
 
-  async function resolveNodeContext(requestedId) {
+  function selectionQueryValue(nodes, selectedIds) {
+    const selected = sanitizeNodeIds(selectedIds);
+    if (!selected.length) return NODE_QUERY_LOCAL;
+    if (nodes.length && selected.length === nodes.length) return NODE_QUERY_ALL;
+    return selected.join(",");
+  }
+
+  function updateSelectionInUrl(nodes, selectedIds) {
+    if (!window.history || typeof window.history.replaceState !== "function") return;
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set(NODE_QUERY_PARAM, selectionQueryValue(nodes, selectedIds));
+      const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+      window.history.replaceState(null, "", nextUrl);
+    } catch (_err) {
+      // Ignore invalid URL state.
+    }
+  }
+
+  function syncSelectionAcrossPageLinks(nodes, selectedIds) {
+    const value = selectionQueryValue(nodes, selectedIds);
+    document.querySelectorAll('a[href^="/dashboard"], a[href^="/trends"], a[href^="/monitor"], a[href^="/sensors"]').forEach(function (anchor) {
+      const href = anchor.getAttribute("href");
+      if (!href) return;
+      try {
+        const url = new URL(href, window.location.origin);
+        url.searchParams.set(NODE_QUERY_PARAM, value);
+        anchor.setAttribute("href", `${url.pathname}${url.search}${url.hash}`);
+      } catch (_err) {
+        // Ignore malformed links.
+      }
+    });
+  }
+
+  function pickSelectedNodeIds(nodes, requestedIds) {
+    if (!nodes.length) return [];
+    const available = new Set(nodes.map(function (node) { return node.id; }));
+    const availableIds = nodes.map(function (node) { return node.id; });
+
+    const fromUrl = readSelectionFromUrl();
+    if (fromUrl.exists) {
+      if (fromUrl.kind === NODE_QUERY_LOCAL) return [];
+      if (fromUrl.kind === NODE_QUERY_ALL) return availableIds;
+      const urlIds = sanitizeNodeIds(fromUrl.nodeIds).filter(function (id) {
+        return available.has(id);
+      });
+      return urlIds.length ? urlIds : availableIds;
+    }
+
+    const requested = sanitizeNodeIds(requestedIds).filter(function (id) {
+      return available.has(id);
+    });
+    if (requested.length) {
+      return requested;
+    }
+
+    const storedSelection = readStoredSelection();
+    const stored = sanitizeNodeIds(storedSelection.nodeIds).filter(function (id) {
+      return available.has(id);
+    });
+    if (storedSelection.exists) {
+      if (!storedSelection.nodeIds.length) return [];
+      if (stored.length) return stored;
+    }
+
+    return availableIds;
+  }
+
+  async function resolveNodeContext(requestedIds) {
     const nodes = await loadNodes();
-    const selectedId = pickSelectedNodeId(nodes, requestedId);
-    persistSelectedNodeId(selectedId);
-    return { nodes, selectedId };
+    const selectedIds = pickSelectedNodeIds(nodes, requestedIds);
+    persistSelectedNodeIds(selectedIds);
+    updateSelectionInUrl(nodes, selectedIds);
+    syncSelectionAcrossPageLinks(nodes, selectedIds);
+    return { nodes, selectedIds };
   }
 
   function withQuery(url, params) {
@@ -168,48 +268,71 @@
     return qs ? `${url}?${qs}` : url;
   }
 
-  function nodeApiUrl(nodeId, nodeSuffix, localPath, params) {
-    const base = nodeId
-      ? `/api/nodes/${encodeURIComponent(nodeId)}${nodeSuffix}`
-      : localPath;
-    return withQuery(base, params);
+  function dataApiUrl(nodeIds, suffix, localPath, params) {
+    const selected = sanitizeNodeIds(nodeIds);
+    const extraParams = { ...(params || {}) };
+    let base = localPath;
+
+    if (selected.length === 1) {
+      base = `/api/nodes/${encodeURIComponent(selected[0])}${suffix}`;
+    } else if (selected.length > 1) {
+      base = `/api/aggregate${suffix}`;
+      extraParams.nodes = selected.join(",");
+    }
+
+    const queryParams = Object.keys(extraParams).length ? extraParams : null;
+    return withQuery(base, queryParams);
   }
 
-  function dashboardKpisUrl(nodeId) {
-    return nodeApiUrl(nodeId, "/kpis/now", "/api/kpis/now");
+  function sourceEndpointHint(nodeIds, suffix, localPath) {
+    const selected = sanitizeNodeIds(nodeIds);
+    if (selected.length === 1) return `/api/nodes/{id}${suffix}`;
+    if (selected.length > 1) return `/api/aggregate${suffix}`;
+    return localPath;
   }
 
-  function hourlySeriesUrl(nodeId) {
-    return nodeApiUrl(nodeId, "/series/hourly", "/api/series/hourly");
+  function dashboardKpisUrl(nodeIds) {
+    return dataApiUrl(nodeIds, "/kpis/now", "/api/kpis/now");
   }
 
-  function dailySeriesUrl(nodeId) {
-    return nodeApiUrl(nodeId, "/series/daily", "/api/series/daily");
+  function hourlySeriesUrl(nodeIds) {
+    return dataApiUrl(nodeIds, "/series/hourly", "/api/series/hourly");
   }
 
-  function observationsLatestUrl(nodeId, limit) {
-    return nodeApiUrl(nodeId, "/observations/latest", "/api/observations/latest", { limit: limit || 20 });
+  function dailySeriesUrl(nodeIds) {
+    return dataApiUrl(nodeIds, "/series/daily", "/api/series/daily");
   }
 
-  function detectionsRecentUrl(nodeId, seconds, limit) {
-    return nodeApiUrl(nodeId, "/detections/recent", "/api/detections/recent", {
+  function observationsLatestUrl(nodeIds, limit) {
+    return dataApiUrl(nodeIds, "/observations/latest", "/api/observations/latest", { limit: limit || 20 });
+  }
+
+  function detectionsRecentUrl(nodeIds, seconds, limit) {
+    return dataApiUrl(nodeIds, "/detections/recent", "/api/detections/recent", {
       seconds: seconds || 300,
       limit: limit || 200,
     });
   }
 
-  function detectionsTopUrl(nodeId, limit) {
+  function detectionsTopUrl(nodeIds, limit) {
     const now = Date.now();
     const from = now - 24 * 60 * 60 * 1000;
-    return nodeApiUrl(nodeId, "/detections/top", "/api/detections/top", {
+    return dataApiUrl(nodeIds, "/detections/top", "/api/detections/top", {
       from_ms: from,
       to_ms: now,
       limit: limit || 50,
     });
   }
 
+  function detectionsStreamUrl(nodeIds) {
+    return dataApiUrl(nodeIds, "/stream/detections", "/api/stream/detections");
+  }
+
   function sensorConfigGetUrl(nodeId) {
-    return nodeApiUrl(nodeId, "/config", "/api/config");
+    const base = nodeId
+      ? `/api/nodes/${encodeURIComponent(nodeId)}/config`
+      : "/api/config";
+    return base;
   }
 
   function sensorConfigPutUrl(nodeId) {
@@ -275,21 +398,55 @@
     return row.first_seen || row.first_seen_iso || row.first_seen_at || row.first_seen_ms;
   }
 
-  async function hydrateDashboard(nodeId) {
+  function sourceHintText(nodes, selectedIds) {
+    const selected = sanitizeNodeIds(selectedIds);
+    if (!selected.length) {
+      return nodes.length ? "Selecciona nodos (o usa hub local)" : "Modo standalone (hub local)";
+    }
+    if (nodes.length && selected.length === nodes.length) {
+      return `Fuente: Todos (${nodes.length} nodos)`;
+    }
+    const byId = new Map(nodes.map(function (node) {
+      return [node.id, node];
+    }));
+    if (selected.length === 1) {
+      const node = byId.get(selected[0]);
+      if (!node) return "Fuente: Nodo seleccionado";
+      return `Fuente: ${node.name} (${node.host || "host n/a"})`;
+    }
+    const names = selected.map(function (id) {
+      const node = byId.get(id);
+      return node ? node.name : id;
+    });
+    return `Fuente: ${names.join(" + ")}`;
+  }
+
+  async function hydrateDashboard(nodeIds) {
     const [kpis, hourlySeries, latest, recentDetections] = await Promise.all([
-      fetchJson(dashboardKpisUrl(nodeId)),
-      fetchJson(hourlySeriesUrl(nodeId)),
-      fetchJson(observationsLatestUrl(nodeId, 5)),
-      fetchJson(detectionsRecentUrl(nodeId, 300, 10)),
+      fetchJson(dashboardKpisUrl(nodeIds)),
+      fetchJson(hourlySeriesUrl(nodeIds)),
+      fetchJson(observationsLatestUrl(nodeIds, 5)),
+      fetchJson(detectionsRecentUrl(nodeIds, 300, 10)),
     ]);
 
     const obs = kpis && kpis.observation ? kpis.observation : null;
+    const selected = sanitizeNodeIds(nodeIds);
+    const isMulti = selected.length > 1;
     setText("kpi-active-devices", obs && Number.isFinite(obs.unique_devices_count) ? String(obs.unique_devices_count) : "--");
     setText("kpi-capacity", kpis && Number.isFinite(kpis.capacity) ? String(kpis.capacity) : "60");
     setText("kpi-load", obs && Number.isFinite(obs.load_pct) ? `${obs.load_pct}%` : "--");
     setText("kpi-raw", obs && Number.isFinite(obs.raw_count) ? String(obs.raw_count) : "--");
+    setText("kpi-sum-raw", obs && Number.isFinite(obs.raw_count) ? String(obs.raw_count) : "--");
+    setText("kpi-sum-capacity", kpis && Number.isFinite(kpis.capacity) ? String(kpis.capacity) : "--");
     setText("kpi-ts", obs ? fmtTs(obs.ts_iso || obs.ts_ms) : "--");
     setText("kpi-sensor-status", kpis && kpis.status ? String(kpis.status).toUpperCase() : "UNKNOWN");
+    setText("kpi-active-label", isMulti ? "Total Devices" : "Active Devices");
+    setText("dashboard-latest-unique-label", isMulti ? "Total" : "Unique");
+    setText("kpi-hourly-title", isMulti ? "Traffic Sum (Hourly Peak)" : "Live Traffic (Hourly Peak)");
+    setText("kpi-sum-raw-label", isMulti ? "Σ Raw" : "Raw");
+    setText("kpi-sum-capacity-label", isMulti ? "Σ Capacity" : "Capacity");
+    setText("kpi-capacity-unit-label", isMulti ? "Σ CAP" : "CAP");
+    setText("kpi-trend-title", isMulti ? "60m Trend (Total)" : "60m Trend");
     setText("updated-at", `UPDATED: ${new Date().toLocaleTimeString()}`);
     if (kpis && kpis.hourly && Number.isFinite(kpis.hourly.avg_unique)) {
       setText("kpi-hourly-avg", `Avg: ${kpis.hourly.avg_unique.toFixed(2)}`);
@@ -359,16 +516,17 @@
     setText(
       "dashboard-detections-note",
       recentDetections
-        ? `Last 5 minutes via ${nodeId ? "/api/nodes/{id}/detections/recent" : "/api/detections/recent"}`
+        ? `Last 5 minutes via ${sourceEndpointHint(nodeIds, "/detections/recent", "/api/detections/recent")}`
         : "Detection API not available yet"
     );
   }
 
-  async function hydrateTrends(nodeId) {
+  async function hydrateTrends(nodeIds) {
+    const isMulti = sanitizeNodeIds(nodeIds).length > 1;
     const [daily, hourly, topDetections] = await Promise.all([
-      fetchJson(dailySeriesUrl(nodeId)),
-      fetchJson(hourlySeriesUrl(nodeId)),
-      fetchJson(detectionsTopUrl(nodeId, 20)),
+      fetchJson(dailySeriesUrl(nodeIds)),
+      fetchJson(hourlySeriesUrl(nodeIds)),
+      fetchJson(detectionsTopUrl(nodeIds, 20)),
     ]);
 
     const dailyItems = asArray(daily);
@@ -444,7 +602,7 @@
     setText(
       "trends-top-note",
       topDetections
-        ? `Top devices over last 24h via ${nodeId ? "/api/nodes/{id}/detections/top" : "/api/detections/top"}`
+        ? `Top devices over last 24h via ${sourceEndpointHint(nodeIds, "/detections/top", "/api/detections/top")}`
         : "Top detections API not available yet"
     );
 
@@ -479,7 +637,7 @@
         labels,
         datasets: [
           {
-            label: "Daily Peak Unique",
+            label: isMulti ? "Daily Peak Total" : "Daily Peak Unique",
             data,
             borderColor: "#D69E1C",
             backgroundColor: "rgba(214, 158, 28, 0.2)",
@@ -499,7 +657,7 @@
       },
     });
     if (note) {
-      note.textContent = `Daily peak chart rendered from ${nodeId ? "/api/nodes/{id}/series/daily" : "/api/series/daily"}.`;
+      note.textContent = `Daily peak chart rendered from ${sourceEndpointHint(nodeIds, "/series/daily", "/api/series/daily")}.`;
     }
   }
 
@@ -533,13 +691,19 @@
     if (items.length > 300) items.length = 300;
   }
 
-  async function hydrateMonitor() {
+  async function hydrateMonitor(nodes, selectedIds) {
     const streamState = document.getElementById("monitor-stream-state");
     const deviceInput = document.getElementById("monitor-filter-device");
     const rssiInput = document.getElementById("monitor-filter-rssi");
     const transportInput = document.getElementById("monitor-filter-transport");
     const refreshBtn = document.getElementById("monitor-refresh-btn");
     const resultCount = document.getElementById("monitor-result-count");
+    const sourceHint = document.getElementById("monitor-source-hint");
+    const nodeIds = sanitizeNodeIds(selectedIds);
+
+    if (sourceHint) {
+      sourceHint.textContent = sourceHintText(nodes, nodeIds);
+    }
 
     var rows = [];
 
@@ -594,7 +758,7 @@
     }
 
     async function loadRecent() {
-      const payload = await fetchJson("/api/detections/recent?seconds=300&limit=200");
+      const payload = await fetchJson(detectionsRecentUrl(nodeIds, 300, 200));
       if (!payload) {
         if (streamState && !rows.length) streamState.textContent = "Waiting for detection API...";
         applyFilters();
@@ -621,7 +785,7 @@
     }
 
     try {
-      const source = new window.EventSource("/api/stream/detections");
+      const source = new window.EventSource(detectionsStreamUrl(nodeIds));
       source.addEventListener("open", function () {
         if (streamState) streamState.textContent = "Streaming";
       });
@@ -770,29 +934,51 @@
     const selector = document.getElementById("dashboard-node-select");
     const hint = document.getElementById("dashboard-node-hint");
 
-    function updateHint(nodes, selectedId) {
-      if (!hint) return;
-      if (!selectedId) {
-        hint.textContent = nodes.length ? "Selecciona un nodo (o usa hub local)" : "Modo standalone (hub local)";
-        return;
-      }
-      const node = nodes.find(function (item) {
-        return item.id === selectedId;
+    function selectedIdsFromSelector(nodes) {
+      if (!selector) return [];
+      const selectedValues = Array.from(selector.selectedOptions).map(function (option) {
+        return option.value || "";
       });
-      if (!node) {
-        hint.textContent = "Nodo seleccionado";
-        return;
+      if (selectedValues.includes("")) return [];
+      if (selectedValues.includes(ALL_NODES_OPTION_VALUE)) {
+        return nodes.map(function (node) { return node.id; });
       }
-      hint.textContent = `Fuente: ${node.name} (${node.host || "host n/a"})`;
+      const valid = new Set(nodes.map(function (node) { return node.id; }));
+      return sanitizeNodeIds(selectedValues).filter(function (id) {
+        return valid.has(id);
+      });
+    }
+
+    function syncSelectorSelection(nodes, selectedIds) {
+      if (!selector) return;
+      const selected = sanitizeNodeIds(selectedIds);
+      const selectedSet = new Set(selected);
+      const allSelected = Boolean(nodes.length) && selected.length === nodes.length;
+      Array.from(selector.options).forEach(function (option) {
+        if (option.value === "") {
+          option.selected = selected.length === 0;
+          return;
+        }
+        if (option.value === ALL_NODES_OPTION_VALUE) {
+          option.selected = allSelected;
+          return;
+        }
+        option.selected = selectedSet.has(option.value);
+      });
+    }
+
+    function updateHint(nodes, selectedIds) {
+      if (!hint) return;
+      hint.textContent = sourceHintText(nodes, selectedIds);
     }
 
     const context = await resolveNodeContext();
     const nodes = context.nodes;
-    const initialNodeId = context.selectedId || "";
+    const initialNodeIds = sanitizeNodeIds(context.selectedIds);
 
     if (!selector) {
-      updateHint(nodes, initialNodeId);
-      await hydrateDashboard(initialNodeId || null);
+      updateHint(nodes, initialNodeIds);
+      await hydrateDashboard(initialNodeIds);
       return;
     }
 
@@ -801,6 +987,10 @@
     localOption.value = "";
     localOption.textContent = "Hub local";
     selector.appendChild(localOption);
+    const allOption = document.createElement("option");
+    allOption.value = ALL_NODES_OPTION_VALUE;
+    allOption.textContent = "Todos";
+    selector.appendChild(allOption);
 
     nodes.forEach(function (node) {
       const option = document.createElement("option");
@@ -809,18 +999,21 @@
       selector.appendChild(option);
     });
 
-    if (initialNodeId) {
-      selector.value = initialNodeId;
-    }
+    selector.multiple = true;
+    selector.size = Math.max(4, Math.min(nodes.length + 2, 8));
+    syncSelectorSelection(nodes, initialNodeIds);
 
-    updateHint(nodes, selector.value || "");
-    await hydrateDashboard(selector.value || null);
+    updateHint(nodes, initialNodeIds);
+    await hydrateDashboard(initialNodeIds);
 
     selector.addEventListener("change", function () {
-      const selectedId = selector.value || "";
-      persistSelectedNodeId(selectedId);
-      updateHint(nodes, selectedId);
-      hydrateDashboard(selectedId || null);
+      const selectedIds = selectedIdsFromSelector(nodes);
+      persistSelectedNodeIds(selectedIds);
+      updateSelectionInUrl(nodes, selectedIds);
+      syncSelectionAcrossPageLinks(nodes, selectedIds);
+      syncSelectorSelection(nodes, selectedIds);
+      updateHint(nodes, selectedIds);
+      hydrateDashboard(selectedIds);
     });
   }
 
@@ -836,18 +1029,22 @@
 
     if (page === "trends") {
       const context = await resolveNodeContext();
-      await hydrateTrends(context.selectedId || null);
+      setText("trends-source-hint", sourceHintText(context.nodes, context.selectedIds));
+      await hydrateTrends(context.selectedIds);
       return;
     }
 
     if (page === "monitor") {
-      await hydrateMonitor();
+      const context = await resolveNodeContext();
+      await hydrateMonitor(context.nodes, context.selectedIds);
       return;
     }
 
     if (page === "sensors") {
       const context = await resolveNodeContext();
-      await hydrateSensors(context.selectedId || null);
+      const selectedIds = sanitizeNodeIds(context.selectedIds);
+      const configNodeId = selectedIds.length === 1 ? selectedIds[0] : null;
+      await hydrateSensors(configNodeId);
     }
   }
 

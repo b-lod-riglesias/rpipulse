@@ -24,7 +24,10 @@
   <section class="rounded-lg border border-surface-highlight bg-surface p-6 shadow-xl">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-2xl font-display font-bold">Trend Intelligence</h2>
-      <span class="text-xs font-mono text-text-muted">Last update from API</span>
+      <div class="text-right">
+        <span class="block text-xs font-mono text-text-muted">Last update from API</span>
+        <span id="trends-source-hint" class="block text-xs font-mono text-text-muted mt-1">Fuente: --</span>
+      </div>
     </div>
     <div class="h-[320px]">
       <canvas id="trends-chart"></canvas>
