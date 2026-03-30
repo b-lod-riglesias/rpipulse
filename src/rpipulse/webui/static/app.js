@@ -1009,7 +1009,6 @@
           id: (document.getElementById("raspberry_node_id") || {}).value || "",
           name: (document.getElementById("raspberry_name") || {}).value || "",
           host: (document.getElementById("raspberry_host") || {}).value || "",
-          bootstrap_user: (document.getElementById("raspberry_bootstrap_user") || {}).value || "",
           ssh_port: toNumber((document.getElementById("raspberry_ssh_port") || {}).value),
           http_port: toNumber((document.getElementById("raspberry_http_port") || {}).value),
           node_user: "rpipulse",

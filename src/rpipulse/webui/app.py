@@ -86,12 +86,10 @@ def _build_sync_script(
     *,
     node_name: str,
     host: str,
-    bootstrap_user: str,
     ssh_port: int,
 ) -> str:
     tool_path = shlex.quote(str(ADD_RASPBERRY_TOOL))
     host_q = shlex.quote(host)
-    user_q = shlex.quote(bootstrap_user)
     port_q = shlex.quote(str(ssh_port))
     name_q = shlex.quote(node_name)
     return "\n".join(
@@ -99,9 +97,7 @@ def _build_sync_script(
             "#!/usr/bin/env bash",
             "set -euo pipefail",
             "",
-            f'DEFAULT_BOOTSTRAP_USER="${{SUDO_USER:-$(id -un)}}"',
-            f'BOOTSTRAP_USER="${{RPIPULSE_BOOTSTRAP_USER:-$DEFAULT_BOOTSTRAP_USER}}"',
-            f'if [[ -z "$BOOTSTRAP_USER" ]]; then BOOTSTRAP_USER={user_q}; fi',
+            'BOOTSTRAP_USER="${SUDO_USER:-$(id -un)}"',
             f'exec {tool_path} --host {host_q} --user "$BOOTSTRAP_USER" --port {port_q} --name {name_q}',
             "",
         ]
@@ -113,7 +109,6 @@ def _create_sync_script(
     node_id: str,
     node_name: str,
     host: str,
-    bootstrap_user: str,
     ssh_port: int,
 ) -> Path:
     if not ADD_RASPBERRY_TOOL.exists():
@@ -125,7 +120,6 @@ def _create_sync_script(
         _build_sync_script(
             node_name=node_name,
             host=host,
-            bootstrap_user=bootstrap_user,
             ssh_port=ssh_port,
         ),
         encoding="utf-8",
@@ -514,14 +508,13 @@ def create_app(db_path: Path | None = None) -> FastAPI:
 
         name = str(payload.get("name") or "").strip()
         host = str(payload.get("host") or "").strip()
-        bootstrap_user = str(payload.get("bootstrap_user") or "").strip()
         node_user = str(payload.get("node_user") or "rpipulse").strip() or "rpipulse"
         raw_node_id = str(payload.get("id") or name).strip()
         node_id = _slugify_node_id(raw_node_id)
         enabled = bool(payload.get("enabled", True))
 
-        if not name or not host or not bootstrap_user:
-            raise HTTPException(status_code=400, detail="Missing required fields: name, host, bootstrap_user")
+        if not name or not host:
+            raise HTTPException(status_code=400, detail="Missing required fields: name, host")
         if not node_id:
             raise HTTPException(status_code=400, detail="Could not derive a valid node id")
 
@@ -565,7 +558,6 @@ def create_app(db_path: Path | None = None) -> FastAPI:
                 node_id=node_id,
                 node_name=name,
                 host=host,
-                bootstrap_user=bootstrap_user,
                 ssh_port=ssh_port,
             )
         except FileNotFoundError as exc:
@@ -587,7 +579,6 @@ def create_app(db_path: Path | None = None) -> FastAPI:
                 "script_body": script_body,
                 "script_path": str(script_path),
                 "command": str(script_path),
-                "bootstrap_user": bootstrap_user,
                 "ssh_port": ssh_port,
                 "http_port": http_port,
             },
