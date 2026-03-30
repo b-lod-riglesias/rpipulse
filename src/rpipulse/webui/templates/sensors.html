@@ -75,12 +75,7 @@
           <span class="text-xs font-mono text-text-muted">Genera un ejecutable local para sincronizar la Raspberry</span>
         </div>
 
-        <form id="raspberry-bootstrap-form" class="p-6 grid grid-cols-1 sm:grid-cols-2 gap-5">
-          <label class="block sm:col-span-2">
-            <span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">admin_token</span>
-            <input id="raspberry_admin_token" name="raspberry_admin_token" type="password" class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" placeholder="Token admin para generar el ejecutable" />
-          </label>
-
+        <form id="raspberry-bootstrap-form" data-bootstrap-token="{{ bootstrap_token or '' }}" class="p-6 grid grid-cols-1 sm:grid-cols-2 gap-5">
           <label class="block">
             <span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">name</span>
             <input id="raspberry_name" name="raspberry_name" type="text" required class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" placeholder="salon" />
@@ -108,7 +103,7 @@
 
           <div class="sm:col-span-2 flex items-center gap-3 mt-2">
             <button id="raspberry-bootstrap-btn" type="submit" class="h-10 px-6 bg-primary hover:bg-yellow-500 text-black font-medium text-sm rounded transition-colors disabled:opacity-60">Generate Sync Script</button>
-            <p id="raspberry-bootstrap-status" class="text-sm font-mono text-text-muted">Waiting for admin token and form data...</p>
+            <p id="raspberry-bootstrap-status" class="text-sm font-mono text-text-muted">Waiting for form data...</p>
           </div>
 
           <div id="raspberry-bootstrap-result" class="sm:col-span-2 hidden rounded border border-surface-highlight bg-background-dark p-4">

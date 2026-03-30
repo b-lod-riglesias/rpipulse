@@ -984,7 +984,6 @@
     const scriptPathNode = document.getElementById("raspberry-script-path");
     const shellCommandNode = document.getElementById("raspberry-shell-command");
     const downloadLink = document.getElementById("raspberry-download-link");
-    const adminTokenInput = document.getElementById("raspberry_admin_token");
 
     function setBootstrapStatus(text, isError) {
       if (!bootstrapStatus) return;
@@ -994,15 +993,11 @@
     }
 
     if (bootstrapForm) {
-      if (adminTokenInput && !adminTokenInput.value) {
-        adminTokenInput.value = getAdminToken();
-      }
-
       bootstrapForm.addEventListener("submit", async function (event) {
         event.preventDefault();
         if (bootstrapBtn) bootstrapBtn.setAttribute("disabled", "disabled");
 
-        const tokenValue = adminTokenInput ? String(adminTokenInput.value || "").trim() : "";
+        const tokenValue = String(bootstrapForm.dataset.bootstrapToken || getAdminToken() || "").trim();
         setAdminToken(tokenValue);
 
         const payload = {

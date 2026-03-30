@@ -429,7 +429,11 @@ def create_app(db_path: Path | None = None) -> FastAPI:
 
     @app.get("/sensors", response_class=HTMLResponse)
     def sensors(request: Request) -> HTMLResponse:
-        return templates.TemplateResponse(request, "sensors.html")
+        return templates.TemplateResponse(
+            request,
+            "sensors.html",
+            {"bootstrap_token": os.environ.get("RPIPULSE_ADMIN_TOKEN", "")},
+        )
     @app.get("/terminal", response_class=HTMLResponse)
     def terminal_page(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(request, "terminal.html")
