@@ -983,6 +983,9 @@
     const bootstrapResult = document.getElementById("raspberry-bootstrap-result");
     const scriptPath = document.getElementById("raspberry-script-path");
     const scriptCommand = document.getElementById("raspberry-script-command");
+    const shortUrlNode = document.getElementById("raspberry-short-url");
+    const shellCommandNode = document.getElementById("raspberry-shell-command");
+    const downloadLink = document.getElementById("raspberry-download-link");
     const adminTokenInput = document.getElementById("raspberry_admin_token");
 
     function setBootstrapStatus(text, isError) {
@@ -1028,12 +1031,18 @@
         const bootstrap = response.data.bootstrap || {};
         if (scriptPath) scriptPath.textContent = bootstrap.script_path || "--";
         if (scriptCommand) scriptCommand.textContent = bootstrap.command || "--";
+        if (shortUrlNode) shortUrlNode.textContent = bootstrap.short_url || "--";
+        if (shellCommandNode) shellCommandNode.textContent = bootstrap.shell_command || "--";
+        if (downloadLink) {
+          downloadLink.href = bootstrap.short_url ? `${bootstrap.short_url}?download=1` : "#";
+          downloadLink.setAttribute("download", bootstrap.script_filename || "bootstrap.sh");
+        }
         if (bootstrapResult) bootstrapResult.classList.remove("hidden");
         if (bootstrap.script_filename && bootstrap.script_body) {
           downloadTextFile(bootstrap.script_filename, bootstrap.script_body);
         }
         nodesCachePromise = null;
-        setBootstrapStatus("Raspberry registrada y .sh descargado.", false);
+        setBootstrapStatus("Raspberry registrada y enlace corto generado.", false);
         showToast("Raspberry añadida", "success");
       });
     }

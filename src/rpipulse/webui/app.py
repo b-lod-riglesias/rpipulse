@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import secrets
 import shlex
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,7 @@ from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -38,6 +39,7 @@ TEMPLATES_DIR = WEBUI_DIR / "templates"
 STATIC_DIR = WEBUI_DIR / "static"
 REPO_ROOT = WEBUI_DIR.parents[2]
 SYNC_SCRIPTS_DIR = REPO_ROOT / "data" / "generated_sync"
+SYNC_LINKS_DIR = SYNC_SCRIPTS_DIR / "links"
 ADD_RASPBERRY_TOOL = REPO_ROOT / "tools" / "add_raspberry.sh"
 
 
@@ -127,6 +129,37 @@ def _create_sync_script(
     )
     script_path.chmod(0o755)
     return script_path
+
+
+def _create_short_bootstrap_link(
+    *,
+    node_id: str,
+    script_path: Path,
+) -> str:
+    SYNC_LINKS_DIR.mkdir(parents=True, exist_ok=True)
+    for _ in range(20):
+        code = secrets.token_urlsafe(4).replace("_", "").replace("-", "")[:6].lower()
+        if len(code) < 6:
+            continue
+        link_path = SYNC_LINKS_DIR / f"{code}.json"
+        if link_path.exists():
+            continue
+        link_path.write_text(
+            json.dumps({"node_id": node_id, "script_path": str(script_path)}, ensure_ascii=True),
+            encoding="utf-8",
+        )
+        return code
+    raise RuntimeError("Could not allocate bootstrap link")
+
+
+def _read_short_bootstrap_link(code: str) -> dict[str, Any]:
+    link_path = SYNC_LINKS_DIR / f"{code}.json"
+    if not link_path.exists():
+        raise FileNotFoundError(code)
+    payload = json.loads(link_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid bootstrap link payload")
+    return payload
 
 
 def _as_int(value: Any, default: int = 0) -> int:
@@ -462,7 +495,11 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         return {"config": config}
 
     @app.post("/api/admin/raspberries/bootstrap")
-    def api_bootstrap_raspberry(payload: dict[str, Any], token: str | None = Query(default=None)) -> dict[str, Any]:
+    def api_bootstrap_raspberry(
+        payload: dict[str, Any],
+        request: Request,
+        token: str | None = Query(default=None),
+    ) -> dict[str, Any]:
         _require_admin_token(token)
 
         from rpipulse.db import create_node, get_node, update_node
@@ -529,9 +566,15 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         node.pop("password", None)
         script_filename = script_path.name
         script_body = script_path.read_text(encoding="utf-8")
+        short_code = _create_short_bootstrap_link(node_id=node_id, script_path=script_path)
+        base_url = str(request.base_url).rstrip("/")
+        short_url = f"{base_url}/r/{short_code}"
         return {
             "node": node,
             "bootstrap": {
+                "short_code": short_code,
+                "short_url": short_url,
+                "shell_command": f"curl -fsSL {shlex.quote(short_url)} | bash",
                 "script_filename": script_filename,
                 "script_body": script_body,
                 "script_path": str(script_path),
@@ -541,6 +584,25 @@ def create_app(db_path: Path | None = None) -> FastAPI:
                 "http_port": http_port,
             },
         }
+
+    @app.get("/r/{code}")
+    def api_bootstrap_short_link(code: str, download: int = Query(default=0)) -> PlainTextResponse:
+        try:
+            payload = _read_short_bootstrap_link(code)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Bootstrap link not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        script_path = Path(str(payload.get("script_path") or ""))
+        if not script_path.exists():
+            raise HTTPException(status_code=404, detail="Bootstrap script not found")
+
+        content = script_path.read_text(encoding="utf-8")
+        headers: dict[str, str] = {}
+        if download:
+            headers["Content-Disposition"] = f'attachment; filename="{script_path.name}"'
+        return PlainTextResponse(content, media_type="text/x-shellscript; charset=utf-8", headers=headers)
 
     @app.get("/api/series/daily")
     def api_daily_series() -> dict[str, Any]:
