@@ -10,34 +10,56 @@
 #   ./add_raspberry.sh --host 192.168.1.101 --user pi --port 2222 --name cocina
 #
 
-set -e
+set -euo pipefail
 
 # Defaults
 SSH_PORT=22
 SSH_USER=""
 RPI_HOST=""
 RPI_NAME=""
-SSH_KEY_FILE="/etc/rpipulse/ssh/id_ed25519"
-USE_KEY_AUTH=true
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+SSH_KEY_FILE="${RPIPULSE_SSH_KEY_PATH:-/etc/rpipulse/ssh/id_ed25519}"
+USE_KEY_AUTH=false
+if [[ -f "$SSH_KEY_FILE" ]]; then
+  USE_KEY_AUTH=true
+fi
+RELEASE_NAME="$(date -u +%Y%m%d%H%M%S)"
+RELEASE_ARCHIVE="/tmp/rpipulse-release-${RELEASE_NAME}.tar.gz"
 
 # SSH ControlMaster for single connection (avoid antibot/blocking)
 # Uses a single persistent SSH connection for all operations
 SSH_CONTROL_DIR="/tmp/rpipulse-ssh-$$"
 SSH_CONTROL_SOCKET="${SSH_CONTROL_DIR}/socket"
-SSH_OPTS_BASE="-p ${SSH_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${SSH_KEY_FILE} -o ControlMaster=auto -o ControlPath=${SSH_CONTROL_SOCKET} -o ControlPersist=300"
+SSH_OPTS_BASE=(
+  -p "${SSH_PORT}"
+  -o StrictHostKeyChecking=no
+  -o UserKnownHostsFile=/dev/null
+  -o ControlMaster=auto
+  -o ControlPath="${SSH_CONTROL_SOCKET}"
+  -o ControlPersist=300
+)
+if [[ "$USE_KEY_AUTH" == "true" ]]; then
+  SSH_OPTS_BASE+=(-i "${SSH_KEY_FILE}")
+fi
 
 # Cleanup function for SSH control socket
 cleanup_ssh() {
   if [[ -n "$SSH_CONTROL_SOCKET" ]] && [[ -S "$SSH_CONTROL_SOCKET" ]]; then
-    ssh -S "$SSH_CONTROL_SOCKET" -O exit 2>/dev/null || true
+    ssh -S "$SSH_CONTROL_SOCKET" -O exit dummy 2>/dev/null || true
   fi
+  rm -f "$RELEASE_ARCHIVE" 2>/dev/null || true
   rm -rf "$SSH_CONTROL_DIR" 2>/dev/null || true
 }
 trap cleanup_ssh EXIT
 
 # Helper function to run SSH commands using the persistent connection
 ssh_exec() {
-  ssh $SSH_OPTS_BASE "$@"
+  ssh "${SSH_OPTS_BASE[@]}" "$@"
+}
+
+scp_copy() {
+  scp "${SSH_OPTS_BASE[@]}" "$@"
 }
 
 # Parse args
@@ -105,6 +127,25 @@ fi
 echo "=========================================="
 echo "  Despliegue RPIpulse -> $RPI_NAME ($RPI_HOST)"
 echo "=========================================="
+echo ""
+echo "  Proyecto local: $PROJECT_ROOT"
+if [[ "$USE_KEY_AUTH" == "true" ]]; then
+  echo "  SSH key: $SSH_KEY_FILE"
+else
+  echo "  SSH key: none (using current SSH agent/config)"
+fi
+
+# Preparar release local
+echo "[0/8] Empaquetando release local..."
+tar -C "$PROJECT_ROOT" \
+  --exclude=".git" \
+  --exclude=".pytest_cache" \
+  --exclude="__pycache__" \
+  --exclude=".venv" \
+  --exclude="data/generated_sync" \
+  -czf "$RELEASE_ARCHIVE" \
+  pyproject.toml README.md src tools docs
+echo "  Release empaquetado en $RELEASE_ARCHIVE"
 
 # Initialize SSH control connection first
 echo "[*] Estableciendo conexión SSH persistente..."
@@ -143,6 +184,7 @@ ssh_exec ${SSH_USER}@${RPI_HOST} "
   sudo mkdir -p /opt/rpipulse/releases
   sudo mkdir -p /etc/rpipulse
   sudo mkdir -p /var/lib/rpipulse/data
+  sudo mkdir -p /var/lib/rpipulse/releases
   sudo chown rpipulse:rpipulse /var/lib/rpipulse
   
   # Create environment file with DB path
@@ -152,14 +194,23 @@ ssh_exec ${SSH_USER}@${RPI_HOST} "
   echo '  Directorios y rpipulse.env creados'
 "
 
-# 3. Configurar release
-echo "[3/8] Configurando release..."
+# 3. Subir y configurar release
+echo "[3/8] Subiendo y configurando release..."
+scp_copy "$RELEASE_ARCHIVE" ${SSH_USER}@${RPI_HOST}:/tmp/rpipulse-release.tar.gz
 ssh_exec ${SSH_USER}@${RPI_HOST} "
-  RELEASE_DIR=\$(ls -td /opt/rpipulse/releases/*/ 2>/dev/null | head -1)
-  if [ -z "\$RELEASE_DIR" ]; then
-    echo 'ERROR: No hay releases en /opt/rpipulse/releases/'
-    exit 1
+  RELEASE_DIR=/opt/rpipulse/releases/${RELEASE_NAME}
+  sudo rm -rf \$RELEASE_DIR
+  sudo mkdir -p \$RELEASE_DIR
+  sudo tar -xzf /tmp/rpipulse-release.tar.gz -C \$RELEASE_DIR
+  sudo chown -R rpipulse:rpipulse \$RELEASE_DIR
+  sudo rm -f /tmp/rpipulse-release.tar.gz
+  if ! command -v python3 >/dev/null 2>&1; then
+    sudo apt-get update -qq
+    sudo apt-get install -y python3 python3-venv python3-pip
   fi
+  sudo -u rpipulse python3 -m venv \$RELEASE_DIR
+  sudo -u rpipulse \$RELEASE_DIR/bin/pip install --upgrade pip wheel setuptools >/dev/null
+  sudo -u rpipulse \$RELEASE_DIR/bin/pip install -e \"\$RELEASE_DIR[ble,ui]\" >/dev/null
   sudo ln -sfn \$RELEASE_DIR /opt/rpipulse/current
   if [ ! -f /opt/rpipulse/current/bin/rpipulse ]; then
     echo 'ERROR: /opt/rpipulse/current/bin/rpipulse no existe'
