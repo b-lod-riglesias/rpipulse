@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -141,6 +142,47 @@ def test_webui_detection_and_config_endpoints(tmp_path: Path) -> None:
     config_after = _route(app, "/api/config", method="PUT").endpoint(payload={"duration": 21, "retention_days": 11})
     assert config_after["config"]["duration"] == 21
     assert config_after["config"]["retention_days"] == 11
+
+
+def test_bootstrap_raspberry_creates_node_and_executable(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "ui.sqlite"
+    _seed(db_path)
+    app = create_app(db_path=db_path)
+    route = _route(app, "/api/admin/raspberries/bootstrap", method="POST")
+
+    monkeypatch.setenv("RPIPULSE_ADMIN_TOKEN", "secret-token")
+    generated_dir = tmp_path / "generated"
+    tool_path = tmp_path / "add_raspberry.sh"
+    tool_path.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    tool_path.chmod(0o755)
+    monkeypatch.setattr(webui_app_module, "SYNC_SCRIPTS_DIR", generated_dir)
+    monkeypatch.setattr(webui_app_module, "ADD_RASPBERRY_TOOL", tool_path)
+
+    payload = route.endpoint(
+        payload={
+            "name": "Salon Norte",
+            "host": "192.168.1.50",
+            "bootstrap_user": "pi",
+            "ssh_port": 22,
+            "http_port": 8000,
+        },
+        token="secret-token",
+    )
+
+    assert payload["node"]["id"] == "salon-norte"
+    assert payload["node"]["name"] == "Salon Norte"
+    assert payload["node"]["host"] == "192.168.1.50"
+    assert payload["node"]["port"] == 8000
+    assert payload["node"]["user"] == "rpipulse"
+
+    script_path = Path(payload["bootstrap"]["script_path"])
+    assert script_path.exists()
+    assert os.access(script_path, os.X_OK)
+    script_body = script_path.read_text(encoding="utf-8")
+    assert str(tool_path) in script_body
+    assert "--host 192.168.1.50" in script_body
+    assert "--user pi" in script_body
+    assert "--name 'Salon Norte'" in script_body
 
 
 def test_node_kpis_proxy_allows_without_token(tmp_path: Path, monkeypatch) -> None:

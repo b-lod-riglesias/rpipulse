@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
+import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -34,6 +36,9 @@ from rpipulse.db import (
 WEBUI_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = WEBUI_DIR / "templates"
 STATIC_DIR = WEBUI_DIR / "static"
+REPO_ROOT = WEBUI_DIR.parents[2]
+SYNC_SCRIPTS_DIR = REPO_ROOT / "data" / "generated_sync"
+ADD_RASPBERRY_TOOL = REPO_ROOT / "tools" / "add_raspberry.sh"
 
 
 def resolve_db_path(override: Path | None = None) -> Path:
@@ -68,6 +73,60 @@ def _status_from_load_pct(load_pct: float | None) -> str:
     if load_pct < 85:
         return "busy"
     return "packed"
+
+
+def _slugify_node_id(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", value.strip().lower())
+    return normalized.strip("-")
+
+
+def _build_sync_script(
+    *,
+    node_name: str,
+    host: str,
+    bootstrap_user: str,
+    ssh_port: int,
+) -> str:
+    tool_path = shlex.quote(str(ADD_RASPBERRY_TOOL))
+    host_q = shlex.quote(host)
+    user_q = shlex.quote(bootstrap_user)
+    port_q = shlex.quote(str(ssh_port))
+    name_q = shlex.quote(node_name)
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            "",
+            f"exec {tool_path} --host {host_q} --user {user_q} --port {port_q} --name {name_q}",
+            "",
+        ]
+    )
+
+
+def _create_sync_script(
+    *,
+    node_id: str,
+    node_name: str,
+    host: str,
+    bootstrap_user: str,
+    ssh_port: int,
+) -> Path:
+    if not ADD_RASPBERRY_TOOL.exists():
+        raise FileNotFoundError(f"Missing deployment tool: {ADD_RASPBERRY_TOOL}")
+
+    SYNC_SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    script_path = SYNC_SCRIPTS_DIR / f"sync_{node_id}.sh"
+    script_path.write_text(
+        _build_sync_script(
+            node_name=node_name,
+            host=host,
+            bootstrap_user=bootstrap_user,
+            ssh_port=ssh_port,
+        ),
+        encoding="utf-8",
+    )
+    script_path.chmod(0o755)
+    return script_path
 
 
 def _as_int(value: Any, default: int = 0) -> int:
@@ -401,6 +460,83 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"config": config}
+
+    @app.post("/api/admin/raspberries/bootstrap")
+    def api_bootstrap_raspberry(payload: dict[str, Any], token: str | None = Query(default=None)) -> dict[str, Any]:
+        _require_admin_token(token)
+
+        from rpipulse.db import create_node, get_node, update_node
+
+        name = str(payload.get("name") or "").strip()
+        host = str(payload.get("host") or "").strip()
+        bootstrap_user = str(payload.get("bootstrap_user") or "").strip()
+        node_user = str(payload.get("node_user") or "rpipulse").strip() or "rpipulse"
+        raw_node_id = str(payload.get("id") or name).strip()
+        node_id = _slugify_node_id(raw_node_id)
+        enabled = bool(payload.get("enabled", True))
+
+        if not name or not host or not bootstrap_user:
+            raise HTTPException(status_code=400, detail="Missing required fields: name, host, bootstrap_user")
+        if not node_id:
+            raise HTTPException(status_code=400, detail="Could not derive a valid node id")
+
+        try:
+            ssh_port = int(payload.get("ssh_port", 22))
+            http_port = int(payload.get("http_port", 8000))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="ssh_port and http_port must be integers") from exc
+
+        if not (1 <= ssh_port <= 65535):
+            raise HTTPException(status_code=400, detail="ssh_port must be between 1 and 65535")
+        if not (1 <= http_port <= 65535):
+            raise HTTPException(status_code=400, detail="http_port must be between 1 and 65535")
+
+        existing = get_node(node_id=node_id, db_path=app.state.db_path)
+        if existing is None:
+            node = create_node(
+                node_id=node_id,
+                name=name,
+                host=host,
+                port=http_port,
+                user=node_user,
+                enabled=enabled,
+                db_path=app.state.db_path,
+            )
+        else:
+            node = update_node(
+                node_id=node_id,
+                name=name,
+                host=host,
+                port=http_port,
+                user=node_user,
+                enabled=enabled,
+                db_path=app.state.db_path,
+            )
+            if node is None:
+                raise HTTPException(status_code=404, detail="Node not found")
+
+        try:
+            script_path = _create_sync_script(
+                node_id=node_id,
+                node_name=name,
+                host=host,
+                bootstrap_user=bootstrap_user,
+                ssh_port=ssh_port,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        node.pop("password", None)
+        return {
+            "node": node,
+            "bootstrap": {
+                "script_path": str(script_path),
+                "command": str(script_path),
+                "bootstrap_user": bootstrap_user,
+                "ssh_port": ssh_port,
+                "http_port": http_port,
+            },
+        }
 
     @app.get("/api/series/daily")
     def api_daily_series() -> dict[str, Any]:

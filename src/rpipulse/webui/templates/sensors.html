@@ -65,6 +65,59 @@
           </div>
         </form>
       </div>
+
+      <div class="mt-8 bg-surface border border-surface-highlight rounded-lg shadow-xl overflow-hidden">
+        <div class="px-6 py-4 border-b border-surface-highlight bg-surface-highlight/30 flex flex-wrap justify-between items-center gap-3">
+          <h2 class="text-lg font-display font-medium text-white flex items-center gap-2">
+            <span class="material-symbols-outlined text-primary" style="font-size: 20px;">memory</span>
+            Add Raspberry
+          </h2>
+          <span class="text-xs font-mono text-text-muted">Genera un ejecutable local para sincronizar la Raspberry</span>
+        </div>
+
+        <form id="raspberry-bootstrap-form" class="p-6 grid grid-cols-1 sm:grid-cols-2 gap-5">
+          <label class="block">
+            <span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">name</span>
+            <input id="raspberry_name" name="raspberry_name" type="text" required class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" placeholder="salon" />
+          </label>
+
+          <label class="block">
+            <span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">host</span>
+            <input id="raspberry_host" name="raspberry_host" type="text" required class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" placeholder="192.168.1.100" />
+          </label>
+
+          <label class="block">
+            <span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">bootstrap_user</span>
+            <input id="raspberry_bootstrap_user" name="raspberry_bootstrap_user" type="text" required class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" value="pi" />
+          </label>
+
+          <label class="block">
+            <span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">ssh_port</span>
+            <input id="raspberry_ssh_port" name="raspberry_ssh_port" type="number" min="1" max="65535" step="1" required class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" value="22" />
+          </label>
+
+          <label class="block">
+            <span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">node_id</span>
+            <input id="raspberry_node_id" name="raspberry_node_id" type="text" class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" placeholder="Opcional, se genera desde el nombre" />
+          </label>
+
+          <label class="block">
+            <span class="block text-xs font-bold text-text-muted uppercase tracking-wider mb-2">http_port</span>
+            <input id="raspberry_http_port" name="raspberry_http_port" type="number" min="1" max="65535" step="1" required class="w-full bg-background-dark border border-surface-highlight rounded h-10 px-3 text-white font-mono" value="8000" />
+          </label>
+
+          <div class="sm:col-span-2 flex items-center gap-3 mt-2">
+            <button id="raspberry-bootstrap-btn" type="submit" class="h-10 px-6 bg-primary hover:bg-yellow-500 text-black font-medium text-sm rounded transition-colors disabled:opacity-60">Generate Sync Script</button>
+            <p id="raspberry-bootstrap-status" class="text-sm font-mono text-text-muted">Waiting for admin token and form data...</p>
+          </div>
+
+          <div id="raspberry-bootstrap-result" class="sm:col-span-2 hidden rounded border border-surface-highlight bg-background-dark p-4">
+            <p class="text-xs font-bold uppercase tracking-wider text-text-muted mb-2">Generated Executable</p>
+            <p class="text-sm text-text-main mb-2">Script path: <code id="raspberry-script-path" class="text-primary">--</code></p>
+            <p class="text-sm text-text-main">Run on the hub: <code id="raspberry-script-command" class="text-primary">--</code></p>
+          </div>
+        </form>
+      </div>
     </div>
   </main>
 </div>

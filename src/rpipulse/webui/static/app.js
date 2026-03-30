@@ -40,6 +40,22 @@
     }
   }
 
+  async function postJson(url, payload) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(function () {
+        return null;
+      });
+      return { ok: response.ok, status: response.status, data };
+    } catch (_err) {
+      return { ok: false, status: 0, data: null };
+    }
+  }
+
   function getAdminToken() {
     try {
       return sessionStorage.getItem("rpipulse_admin_token") || "";
@@ -340,6 +356,13 @@
     // Only the HUB proxy PUT requires token. The node-local /api/config does not.
     if (!base.startsWith("/api/nodes/")) return base;
     const token = getAdminToken();
+    if (!token) return base;
+    return `${base}?token=${encodeURIComponent(token)}`;
+  }
+
+  function raspberryBootstrapUrl() {
+    const token = getAdminToken();
+    const base = "/api/admin/raspberries/bootstrap";
     if (!token) return base;
     return `${base}?token=${encodeURIComponent(token)}`;
   }
@@ -924,6 +947,56 @@
     if (reloadBtn) {
       reloadBtn.addEventListener("click", function () {
         loadConfig();
+      });
+    }
+
+    const bootstrapForm = document.getElementById("raspberry-bootstrap-form");
+    const bootstrapBtn = document.getElementById("raspberry-bootstrap-btn");
+    const bootstrapStatus = document.getElementById("raspberry-bootstrap-status");
+    const bootstrapResult = document.getElementById("raspberry-bootstrap-result");
+    const scriptPath = document.getElementById("raspberry-script-path");
+    const scriptCommand = document.getElementById("raspberry-script-command");
+
+    function setBootstrapStatus(text, isError) {
+      if (!bootstrapStatus) return;
+      bootstrapStatus.textContent = text;
+      bootstrapStatus.classList.toggle("text-accent-red", Boolean(isError));
+      bootstrapStatus.classList.toggle("text-text-muted", !isError);
+    }
+
+    if (bootstrapForm) {
+      bootstrapForm.addEventListener("submit", async function (event) {
+        event.preventDefault();
+        if (bootstrapBtn) bootstrapBtn.setAttribute("disabled", "disabled");
+
+        const payload = {
+          id: (document.getElementById("raspberry_node_id") || {}).value || "",
+          name: (document.getElementById("raspberry_name") || {}).value || "",
+          host: (document.getElementById("raspberry_host") || {}).value || "",
+          bootstrap_user: (document.getElementById("raspberry_bootstrap_user") || {}).value || "",
+          ssh_port: toNumber((document.getElementById("raspberry_ssh_port") || {}).value),
+          http_port: toNumber((document.getElementById("raspberry_http_port") || {}).value),
+          node_user: "rpipulse",
+          enabled: true,
+        };
+
+        setBootstrapStatus("Generating sync executable ...", false);
+        const response = await postJson(raspberryBootstrapUrl(), payload);
+        if (bootstrapBtn) bootstrapBtn.removeAttribute("disabled");
+
+        if (!response.ok || !response.data) {
+          setBootstrapStatus(`Could not generate sync executable (status ${response.status || "n/a"}).`, true);
+          showToast("Error generando ejecutable", "error");
+          return;
+        }
+
+        const bootstrap = response.data.bootstrap || {};
+        if (scriptPath) scriptPath.textContent = bootstrap.script_path || "--";
+        if (scriptCommand) scriptCommand.textContent = bootstrap.command || "--";
+        if (bootstrapResult) bootstrapResult.classList.remove("hidden");
+        nodesCachePromise = null;
+        setBootstrapStatus("Raspberry registrada y ejecutable generado.", false);
+        showToast("Raspberry añadida", "success");
       });
     }
 
