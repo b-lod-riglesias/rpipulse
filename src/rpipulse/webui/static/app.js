@@ -981,6 +981,7 @@
     const bootstrapBtn = document.getElementById("raspberry-bootstrap-btn");
     const bootstrapStatus = document.getElementById("raspberry-bootstrap-status");
     const bootstrapResult = document.getElementById("raspberry-bootstrap-result");
+    const scriptPathNode = document.getElementById("raspberry-script-path");
     const shellCommandNode = document.getElementById("raspberry-shell-command");
     const downloadLink = document.getElementById("raspberry-download-link");
     const adminTokenInput = document.getElementById("raspberry_admin_token");
@@ -1026,6 +1027,7 @@
         }
 
         const bootstrap = response.data.bootstrap || {};
+        if (scriptPathNode) scriptPathNode.textContent = bootstrap.script_path || "--";
         if (shellCommandNode) shellCommandNode.textContent = bootstrap.shell_command || "--";
         if (downloadLink) {
           downloadLink.href = bootstrap.short_url ? `${bootstrap.short_url}?download=1` : "#";

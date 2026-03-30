@@ -174,8 +174,8 @@ def test_bootstrap_raspberry_creates_node_and_executable(tmp_path: Path, monkeyp
     assert payload["node"]["host"] == "192.168.1.50"
     assert payload["node"]["port"] == 8000
     assert payload["node"]["user"] == "rpipulse"
-    assert payload["bootstrap"]["short_code"]
-    assert payload["bootstrap"]["short_url"].endswith(f"/r/{payload['bootstrap']['short_code']}")
+    assert payload["bootstrap"]["short_code"] == "salon-norte"
+    assert payload["bootstrap"]["short_url"].endswith("/r/salon-norte")
     assert payload["bootstrap"]["shell_command"].startswith("curl -fsSL ")
 
     script_path = Path(payload["bootstrap"]["script_path"])

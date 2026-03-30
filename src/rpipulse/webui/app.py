@@ -137,12 +137,17 @@ def _create_short_bootstrap_link(
     script_path: Path,
 ) -> str:
     SYNC_LINKS_DIR.mkdir(parents=True, exist_ok=True)
-    for _ in range(20):
-        code = secrets.token_urlsafe(4).replace("_", "").replace("-", "")[:6].lower()
-        if len(code) < 6:
-            continue
+    base_code = _slugify_node_id(node_id) or secrets.token_urlsafe(4).replace("_", "").replace("-", "")[:6].lower()
+    for index in range(20):
+        code = base_code if index == 0 else f"{base_code}-{index + 1}"
         link_path = SYNC_LINKS_DIR / f"{code}.json"
         if link_path.exists():
+            try:
+                existing = json.loads(link_path.read_text(encoding="utf-8"))
+            except Exception:
+                existing = None
+            if isinstance(existing, dict) and str(existing.get("script_path") or "") == str(script_path):
+                return code
             continue
         link_path.write_text(
             json.dumps({"node_id": node_id, "script_path": str(script_path)}, ensure_ascii=True),
