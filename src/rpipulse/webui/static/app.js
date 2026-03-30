@@ -76,6 +76,21 @@
     }
   }
 
+  function downloadTextFile(filename, content) {
+    if (!filename || content === null || content === undefined) return;
+    const blob = new Blob([String(content)], { type: "application/x-sh;charset=utf-8" });
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(function () {
+      window.URL.revokeObjectURL(url);
+    }, 1000);
+  }
+
 
   function asArray(payload) {
     if (Array.isArray(payload)) return payload;
@@ -1014,8 +1029,11 @@
         if (scriptPath) scriptPath.textContent = bootstrap.script_path || "--";
         if (scriptCommand) scriptCommand.textContent = bootstrap.command || "--";
         if (bootstrapResult) bootstrapResult.classList.remove("hidden");
+        if (bootstrap.script_filename && bootstrap.script_body) {
+          downloadTextFile(bootstrap.script_filename, bootstrap.script_body);
+        }
         nodesCachePromise = null;
-        setBootstrapStatus("Raspberry registrada y ejecutable generado.", false);
+        setBootstrapStatus("Raspberry registrada y .sh descargado.", false);
         showToast("Raspberry añadida", "success");
       });
     }

@@ -527,9 +527,13 @@ def create_app(db_path: Path | None = None) -> FastAPI:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         node.pop("password", None)
+        script_filename = script_path.name
+        script_body = script_path.read_text(encoding="utf-8")
         return {
             "node": node,
             "bootstrap": {
+                "script_filename": script_filename,
+                "script_body": script_body,
                 "script_path": str(script_path),
                 "command": str(script_path),
                 "bootstrap_user": bootstrap_user,

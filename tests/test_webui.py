@@ -179,6 +179,8 @@ def test_bootstrap_raspberry_creates_node_and_executable(tmp_path: Path, monkeyp
     assert script_path.exists()
     assert os.access(script_path, os.X_OK)
     script_body = script_path.read_text(encoding="utf-8")
+    assert payload["bootstrap"]["script_filename"] == "sync_salon-norte.sh"
+    assert payload["bootstrap"]["script_body"] == script_body
     assert str(tool_path) in script_body
     assert "--host 192.168.1.50" in script_body
     assert "--user pi" in script_body
